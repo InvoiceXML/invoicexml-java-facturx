@@ -16,20 +16,20 @@ Maven:
 <dependency>
     <groupId>com.invoicexml</groupId>
     <artifactId>invoicexml-facturx</artifactId>
-    <version>0.1.0</version>
+    <version>0.1.1</version>
 </dependency>
 ```
 
 Gradle (Kotlin DSL):
 
 ```kotlin
-implementation("com.invoicexml:invoicexml-facturx:0.1.0")
+implementation("com.invoicexml:invoicexml-facturx:0.1.1")
 ```
 
 Gradle (Groovy DSL):
 
 ```groovy
-implementation 'com.invoicexml:invoicexml-facturx:0.1.0'
+implementation 'com.invoicexml:invoicexml-facturx:0.1.1'
 ```
 
 ## Get an API key
