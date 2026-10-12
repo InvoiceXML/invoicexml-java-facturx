@@ -1,6 +1,6 @@
 # InvoiceXML Factur-X client for Java
 
-Create, validate, embed and extract **Factur-X** e-invoices from Java with the [InvoiceXML API](https://invoicexml.com). Build the invoice from typed EN 16931 models and get back a compliant Factur-X PDF/A-3, already validated against the official rule set and, on request, the French mandate's BR-FR rules.
+Create, validate, embed and extract **Factur-X** e-invoices from Java with the [InvoiceXML API](https://www.invoicexml.com). Build the invoice from typed EN 16931 models and get back a compliant Factur-X PDF/A-3, already validated against the official rule set and, on request, the French mandate's BR-FR rules.
 
 - Java 11 or later, `java.net.http.HttpClient`, Jackson as the only dependency
 - Typed EN 16931 invoice model generated from the API's OpenAPI schema
@@ -34,7 +34,7 @@ implementation 'com.invoicexml:invoicexml-facturx:0.1.0'
 
 ## Get an API key
 
-Sign up at [invoicexml.com/account/signup](https://invoicexml.com/account/signup) for a 30-day free trial with 100 credits. No credit card is needed.
+Sign up at [invoicexml.com/account/signup](https://www.invoicexml.com/account/signup) for a 30-day free trial with 100 credits. No credit card is needed.
 
 ## Create a Factur-X invoice
 
@@ -154,7 +154,7 @@ The client is immutable and thread-safe. Create one instance and share it. To re
 - **Rule sets updated on their legal effective dates.** New Factur-X, BR-FR and EN 16931 rule versions go live on the API the day they take legal effect. The rules run on the server, so you never update this library or redeploy for a new rule version.
 - **Validated before delivery.** Every document is checked against the official XSD and Schematron rules before it is returned.
 - **Zero data retention.** Invoices are processed in memory and purged when the response is delivered. Nothing is stored or logged, and nothing is used for AI training.
-- **Processing in Frankfurt.** All processing happens in the EU, in Frankfurt, Germany. See [invoicexml.com/trust](https://invoicexml.com/trust).
+- **Processing in Frankfurt.** All processing happens in the EU, in Frankfurt, Germany. See [invoicexml.com/trust](https://www.invoicexml.com/trust).
 - **Integration assistance.** Questions about your integration go to [support@invoicexml.com](mailto:support@invoicexml.com), from setup to your first production invoice.
 
 ## Documentation
