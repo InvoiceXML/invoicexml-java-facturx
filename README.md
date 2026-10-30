@@ -16,25 +16,25 @@ Maven:
 <dependency>
     <groupId>com.invoicexml</groupId>
     <artifactId>invoicexml-facturx</artifactId>
-    <version>0.2.0</version>
+    <version>0.3.0</version>
 </dependency>
 ```
 
 Gradle (Kotlin DSL):
 
 ```kotlin
-implementation("com.invoicexml:invoicexml-facturx:0.2.0")
+implementation("com.invoicexml:invoicexml-facturx:0.3.0")
 ```
 
 Gradle (Groovy DSL):
 
 ```groovy
-implementation 'com.invoicexml:invoicexml-facturx:0.2.0'
+implementation 'com.invoicexml:invoicexml-facturx:0.3.0'
 ```
 
 ## Get an API key
 
-Sign up at [invoicexml.com/account/signup](https://www.invoicexml.com/account/signup) for a 30-day free trial with 100 credits. No credit card is needed.
+Sign up at [www.invoicexml.com/account/signup](https://www.invoicexml.com/account/signup) for a 30-day free trial with 100 credits. No credit card is needed.
 
 ## Create a Factur-X invoice
 
@@ -64,6 +64,8 @@ Totals and the VAT breakdown are calculated from the lines. The PDF is a Factur-
 | `createFacturX(invoice[, options])` | `POST /v1/create/facturx` | Factur-X PDF/A-3 (`byte[]`) |
 | `validateFacturX(pdf[, options])` | `POST /v1/validate/facturx` | `ValidationResult` |
 | `embedFacturX(pdf, xml[, options])` | `POST /v1/embed/facturx` | Factur-X PDF/A-3 (`byte[]`) |
+| `emailFacturX(invoice, email[, options])` | `POST /v1/create/facturx/email` | `EmailSendResult` |
+| `emailEmbeddedFacturX(pdf, xml, email[, options])` | `POST /v1/embed/facturx/email` | `EmailSendResult` |
 | `extractJson(file)` | `POST /v1/extract/json` | `InvoiceDocument` |
 | `extractAttachments(file)` | `POST /v1/extract/attachments` | ZIP of embedded documents (`byte[]`) |
 
@@ -93,6 +95,25 @@ byte[] basic = client.createFacturX(invoice.setSpecificationId(FacturXProfiles.B
 ```
 
 `MINIMUM` and `BASIC_WL` carry header data only and serve as booking aids. `BASIC` is the lowest profile the French mandate accepts, and `EXTENDED` adds data for complex invoicing.
+
+## Send an invoice by email
+
+`emailFacturX` creates the same document as `createFacturX`, then sends it as a real email from your own address. The sender must be on a domain added and verified on the Verified email domains page of the dashboard:
+
+```java
+var email = EmailMessage.of("factures@yourcompany.com", "compta@customer.example")
+    .setFromName("Your Company Billing")
+    .addCc("accounting@yourcompany.com");
+
+EmailSendResult sent = client.emailFacturX(invoice, email);
+System.out.println(sent.getMessageId());
+```
+
+`emailEmbeddedFacturX(pdf, xml, email)` sends a Factur-X PDF built from your own PDF and CII XML, always with full validation. Pass `new ValidateOptions().addRule(RuleSet.BR_FR)` as a fourth argument to apply the BR-FR rules too. The subject and message are optional, and a sensible default applies when you leave them out.
+
+The result carries the message id, not the file. `accepted` means the email was handed over for delivery, not that the recipient's server has received it yet. Only HTTP 429 is retried on these calls, so a failed call never sends a second email by itself. After an `InvoiceXmlConnectionException`, or a 503 with `ErrorCodes.PROCESSING_TIMEOUT` (4023), which can happen while the send is in flight, the email may or may not have gone out, so check before you send it again.
+
+A refused send raises `InvoiceXmlApiException`. Branch on `getErrorCode()`: `ErrorCodes.EMAIL_DOMAIN_NOT_VERIFIED`, `ErrorCodes.EMAIL_SENDING_DISABLED`, or `ErrorCodes.EMAIL_NOT_IN_PLAN` when your plan does not include this (see [pricing](https://www.invoicexml.com/pricing)). A bad address raises `InvoiceValidationException` with the field in its findings. See the [email guide](https://www.invoicexml.com/docs/api/create/facturx/email) for the details.
 
 ## Rejected invoices
 
@@ -153,8 +174,8 @@ The client is immutable and thread-safe. Create one instance and share it. To re
 
 - **Rule sets updated on their legal effective dates.** New Factur-X, BR-FR and EN 16931 rule versions go live on the API the day they take legal effect. The rules run on the server, so you never update this library or redeploy for a new rule version.
 - **Validated before delivery.** Every document is checked against the official XSD and Schematron rules before it is returned.
-- **Zero data retention.** Invoices are processed in memory and purged when the response is delivered. Nothing is stored or logged, and nothing is used for AI training.
-- **Processing in Frankfurt.** All processing happens in the EU, in Frankfurt, Germany. See [invoicexml.com/trust](https://www.invoicexml.com/trust).
+- **Zero data retention.** Invoices are processed in memory and purged when the response is delivered. Nothing is stored or logged, and nothing is used for AI training. When you email an invoice, it goes to our email service for delivery, and we keep no copy.
+- **Processing in Frankfurt.** All processing happens in the EU, in Frankfurt, Germany. See [www.invoicexml.com/trust](https://www.invoicexml.com/trust).
 - **Integration assistance.** Questions about your integration go to [support@invoicexml.com](mailto:support@invoicexml.com), from setup to your first production invoice.
 
 ## Documentation

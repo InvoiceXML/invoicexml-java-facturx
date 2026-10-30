@@ -2,6 +2,8 @@ package com.invoicexml.facturx;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.invoicexml.facturx.email.EmailMessage;
+import com.invoicexml.facturx.email.EmailSendResult;
 import com.invoicexml.facturx.model.CreateInvoiceRequest;
 import com.invoicexml.facturx.model.InvoiceDocument;
 import com.invoicexml.facturx.model.InvoiceOptions;
@@ -17,6 +19,7 @@ import java.net.URI;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -139,7 +142,7 @@ public final class FacturXClient {
      * @see #createFacturX(InvoiceDocument)
      */
     public byte[] createFacturX(CreateInvoiceRequest request) {
-        return postJson("/v1/create/facturx", request).body();
+        return postJson("/v1/create/facturx", request, null).body();
     }
 
     // -------------------------------------------------------------- validate
@@ -231,6 +234,122 @@ public final class FacturXClient {
         return postMultipart("/v1/embed/facturx", form, null).body();
     }
 
+    // ----------------------------------------------------------------- email
+
+    /**
+     * Creates a Factur-X hybrid invoice like {@link #createFacturX(InvoiceDocument)}
+     * and sends it as a real email from your own verified domain. The result is
+     * the message id of that email, not the file.
+     *
+     * <p>The sender must be on a domain added and verified on the Verified email
+     * domains page of the dashboard. A result means the email was handed over for
+     * delivery, not that the recipient's server has received it yet.
+     *
+     * <p>Only HTTP 429 is retried, because nothing was sent. After an
+     * {@link InvoiceXmlConnectionException}, or a 503 with
+     * {@link ErrorCodes#PROCESSING_TIMEOUT}, which can happen while the send is in
+     * flight, the email may or may not have gone out, so check before you send it again.
+     *
+     * @param invoice the invoice
+     * @param email the sender, recipient and optional texts
+     * @return the status and message id of the sent email
+     * @throws InvoiceValidationException when the invoice violates the rule set or the API rejects an email field
+     * @throws InvoiceXmlApiException with {@link ErrorCodes#EMAIL_DOMAIN_NOT_VERIFIED},
+     *         {@link ErrorCodes#EMAIL_NOT_IN_PLAN} or {@link ErrorCodes#EMAIL_SENDING_DISABLED}
+     *         when the email cannot be sent
+     */
+    public EmailSendResult emailFacturX(InvoiceDocument invoice, EmailMessage email) {
+        return emailFacturX(new CreateInvoiceRequest().setInvoice(invoice), email);
+    }
+
+    /**
+     * Creates a Factur-X hybrid invoice with options and sends it as a real email from
+     * your own verified domain. The result is the message id, not the file.
+     *
+     * @param invoice the invoice
+     * @param email the sender, recipient and optional texts
+     * @param options the options, or {@code null} for the defaults
+     * @return the status and message id of the sent email
+     * @throws InvoiceValidationException when the invoice violates the rule set or the API rejects an email field
+     * @see #emailFacturX(InvoiceDocument, EmailMessage)
+     */
+    public EmailSendResult emailFacturX(InvoiceDocument invoice, EmailMessage email, InvoiceOptions options) {
+        return emailFacturX(new CreateInvoiceRequest().setInvoice(invoice).setOptions(options), email);
+    }
+
+    /**
+     * Creates a Factur-X hybrid invoice from a full request envelope and sends it as a
+     * real email from your own verified domain. The result is the message id, not the file.
+     *
+     * @param request the request
+     * @param email the sender, recipient and optional texts
+     * @return the status and message id of the sent email
+     * @throws InvoiceValidationException when the invoice violates the rule set or the API rejects an email field
+     * @see #emailFacturX(InvoiceDocument, EmailMessage)
+     */
+    public EmailSendResult emailFacturX(CreateInvoiceRequest request, EmailMessage email) {
+        Objects.requireNonNull(request, "request");
+        Objects.requireNonNull(email, "email");
+        String path = "/v1/create/facturx/email";
+        return readJson(path, postJson(path, new EmailInvoiceRequest(request, wireEmail(email)), "application/json"),
+                EmailSendResult.class);
+    }
+
+    /**
+     * Embeds a CII invoice XML into an existing PDF like
+     * {@link #embedFacturX(Path, Path)} and sends the Factur-X PDF/A-3 as a real email
+     * from your own verified domain. The result is the message id, not the file. The
+     * XML always runs through the full rule set first.
+     *
+     * @param pdf the visual PDF
+     * @param xml the CII XML
+     * @param email the sender, recipient and optional texts
+     * @return the status and message id of the sent email
+     * @throws InvoiceValidationException when the XML violates the rule set or the API rejects an email field
+     * @see #emailFacturX(InvoiceDocument, EmailMessage)
+     */
+    public EmailSendResult emailEmbeddedFacturX(Path pdf, Path xml, EmailMessage email) {
+        return emailEmbeddedFacturX(FileUpload.of(pdf), FileUpload.of(xml), email, null);
+    }
+
+    /**
+     * Embeds a CII invoice XML into an existing PDF and sends the Factur-X PDF/A-3 as a
+     * real email from your own verified domain. The result is the message id, not the file.
+     *
+     * @param pdf the visual PDF
+     * @param xml the CII XML
+     * @param email the sender, recipient and optional texts
+     * @return the status and message id of the sent email
+     * @throws InvoiceValidationException when the XML violates the rule set or the API rejects an email field
+     * @see #emailEmbeddedFacturX(Path, Path, EmailMessage)
+     */
+    public EmailSendResult emailEmbeddedFacturX(FileUpload pdf, FileUpload xml, EmailMessage email) {
+        return emailEmbeddedFacturX(pdf, xml, email, null);
+    }
+
+    /**
+     * Embeds a CII invoice XML into an existing PDF with options, for example the
+     * French mandate's BR-FR rules on top of the profile rules, and sends the Factur-X
+     * PDF/A-3 as a real email from your own verified domain. The result is the message
+     * id, not the file.
+     *
+     * @param pdf the visual PDF
+     * @param xml the CII XML
+     * @param email the sender, recipient and optional texts
+     * @param options the options, or {@code null} for the defaults
+     * @return the status and message id of the sent email
+     * @throws InvoiceValidationException when the XML violates the rule set or the API rejects an email field
+     * @see #emailEmbeddedFacturX(Path, Path, EmailMessage)
+     */
+    public EmailSendResult emailEmbeddedFacturX(FileUpload pdf, FileUpload xml, EmailMessage email,
+            ValidateOptions options) {
+        Objects.requireNonNull(email, "email");
+        Multipart form = new Multipart().file("pdf", pdf).file("xml", xml);
+        addRules(form, options == null ? null : options.getRules());
+        addEmail(form, wireEmail(email));
+        return postMultipartForJson("/v1/embed/facturx/email", form, EmailSendResult.class);
+    }
+
     // --------------------------------------------------------------- extract
 
     /**
@@ -294,7 +413,53 @@ public final class FacturXClient {
         }
     }
 
-    private TransportResponse postJson(String path, Object body) {
+    /** The email as sent on every route: blank copy addresses dropped, the others trimmed. */
+    private static EmailMessage wireEmail(EmailMessage email) {
+        return new EmailMessage()
+                .setFrom(email.getFrom())
+                .setFromName(email.getFromName())
+                .setTo(email.getTo())
+                .setCc(copyAddresses(email.getCc()))
+                .setBcc(copyAddresses(email.getBcc()))
+                .setReplyTo(email.getReplyTo())
+                .setSubject(email.getSubject())
+                .setMessage(email.getMessage());
+    }
+
+    private static List<String> copyAddresses(List<String> addresses) {
+        if (addresses == null) {
+            return null;
+        }
+        List<String> kept = new ArrayList<>();
+        for (String address : addresses) {
+            if (address != null && !address.isBlank()) {
+                kept.add(address.strip());
+            }
+        }
+        return kept.isEmpty() ? null : kept;
+    }
+
+    private static void addEmail(Multipart form, EmailMessage email) {
+        form.field("email.from", email.getFrom());
+        form.field("email.fromName", email.getFromName());
+        form.field("email.to", email.getTo());
+        addEach(form, "email.cc", email.getCc());
+        addEach(form, "email.bcc", email.getBcc());
+        form.field("email.replyTo", email.getReplyTo());
+        form.field("email.subject", email.getSubject());
+        form.field("email.message", email.getMessage());
+    }
+
+    private static void addEach(Multipart form, String name, List<String> values) {
+        if (values == null) {
+            return;
+        }
+        for (String value : values) {
+            form.field(name, value);
+        }
+    }
+
+    private TransportResponse postJson(String path, Object body, String accept) {
         Objects.requireNonNull(body, "request");
         byte[] json;
         try {
@@ -302,7 +467,7 @@ public final class FacturXClient {
         } catch (JsonProcessingException e) {
             throw new InvoiceXmlException("Cannot serialize the request: " + e.getOriginalMessage(), e);
         }
-        return execute(path, "application/json", json, null);
+        return execute(path, "application/json", json, accept);
     }
 
     private TransportResponse postMultipart(String path, Multipart form, String accept) {
@@ -310,7 +475,10 @@ public final class FacturXClient {
     }
 
     private <T> T postMultipartForJson(String path, Multipart form, Class<T> type) {
-        TransportResponse response = postMultipart(path, form, "application/json");
+        return readJson(path, postMultipart(path, form, "application/json"), type);
+    }
+
+    private <T> T readJson(String path, TransportResponse response, Class<T> type) {
         try {
             return mapper.readValue(response.body(), type);
         } catch (IOException e) {
@@ -382,6 +550,20 @@ public final class FacturXClient {
     private static final class ExtractJsonResponse {
         @com.fasterxml.jackson.annotation.JsonProperty("invoice")
         InvoiceDocument invoice;
+    }
+
+    /** Request body of the create email endpoint: the create envelope plus {@code email}. */
+    private static final class EmailInvoiceRequest {
+        @com.fasterxml.jackson.annotation.JsonUnwrapped
+        final CreateInvoiceRequest request;
+
+        @com.fasterxml.jackson.annotation.JsonProperty("email")
+        final EmailMessage email;
+
+        EmailInvoiceRequest(CreateInvoiceRequest request, EmailMessage email) {
+            this.request = request;
+            this.email = email;
+        }
     }
 
     /**

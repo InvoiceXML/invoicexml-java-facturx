@@ -10,6 +10,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.invoicexml.facturx.email.EmailMessage;
+import com.invoicexml.facturx.email.EmailSendResult;
 import com.invoicexml.facturx.model.CreateInvoiceRequest;
 import com.invoicexml.facturx.model.InvoiceDocument;
 import com.invoicexml.facturx.model.InvoiceOptions;
@@ -37,6 +39,7 @@ class FacturXClientTest {
 
     private static final byte[] PDF = "%PDF-1.7 stub".getBytes(StandardCharsets.US_ASCII);
     private static final String XML = "<?xml version=\"1.0\"?><rsm:CrossIndustryInvoice/>";
+    private static final String ACCEPTED = "{\"status\":\"accepted\",\"messageId\":\"0107019a-msg\"}";
 
     private final StubTransport stub = new StubTransport();
     private final List<Duration> sleeps = new ArrayList<>();
@@ -53,6 +56,10 @@ class FacturXClientTest {
 
     private static String body(TransportRequest r) {
         return new String(r.body(), StandardCharsets.UTF_8);
+    }
+
+    private static EmailMessage email() {
+        return EmailMessage.of("factures@example.com", "compta@example.org");
     }
 
     private static int count(String haystack, String needle) {
@@ -228,6 +235,222 @@ class FacturXClientTest {
         String body = body(stub.last());
         assertTrue(body.contains("name=\"skipValidation\"\r\n\r\ntrue\r\n"));
         assertTrue(body.contains("name=\"rules\"\r\n\r\nbr-fr\r\n"));
+    }
+
+    // -------------------------------------------------------------- email
+
+    @Test
+    void emailFacturXPostsInvoiceAndEmailAndParsesResult() throws Exception {
+        stub.respondJson(200, ACCEPTED);
+
+        EmailSendResult result = client().emailFacturX(Fixtures.invoice(), email());
+
+        assertEquals("accepted", result.getStatus());
+        assertEquals("0107019a-msg", result.getMessageId());
+        TransportRequest r = stub.last();
+        assertEquals("POST", r.method());
+        assertEquals("https://api.invoicexml.com/v1/create/facturx/email", r.uri().toString());
+        assertEquals("application/json", r.header("Content-Type"));
+        assertEquals("application/json", r.header("Accept"));
+
+        JsonNode sent = json.readTree(r.body());
+        assertEquals(Fixtures.invoice().getInvoiceNumber(), sent.at("/invoice/invoiceNumber").asText());
+        assertFalse(sent.has("options"), "null options must be omitted");
+        JsonNode email = sent.get("email");
+        assertEquals(2, email.size(), "unset email fields must be omitted");
+        assertEquals("factures@example.com", email.get("from").asText());
+        assertEquals("compta@example.org", email.get("to").asText());
+    }
+
+    @Test
+    void emailFacturXSendsOptionsAndEveryEmailField() throws Exception {
+        stub.respondJson(200, ACCEPTED);
+
+        client().emailFacturX(Fixtures.invoice(), email()
+                        .setFromName("Facturation")
+                        .addCc("cc@example.org")
+                        .addBcc("bcc@example.org")
+                        .setReplyTo("aide@example.com")
+                        .setSubject("Facture FA-2026-0042")
+                        .setMessage("Bonjour"),
+                new InvoiceOptions().setLanguage(PdfLanguage.FR).addRule(RuleSet.BR_FR));
+
+        JsonNode sent = json.readTree(stub.last().body());
+        assertEquals("FR", sent.at("/options/language").asText());
+        assertEquals("br-fr", sent.at("/options/rules/0").asText());
+        JsonNode email = sent.get("email");
+        assertEquals("Facturation", email.get("fromName").asText());
+        assertEquals("cc@example.org", email.at("/cc/0").asText());
+        assertEquals("bcc@example.org", email.at("/bcc/0").asText());
+        assertEquals("aide@example.com", email.get("replyTo").asText());
+        assertEquals("Facture FA-2026-0042", email.get("subject").asText());
+        assertEquals("Bonjour", email.get("message").asText());
+    }
+
+    @Test
+    void emailFacturXTakesAFullRequestEnvelope() throws Exception {
+        stub.respondJson(200, ACCEPTED);
+
+        client().emailFacturX(new CreateInvoiceRequest().setInvoice(Fixtures.invoice()), email());
+
+        JsonNode sent = json.readTree(stub.last().body());
+        assertEquals(Fixtures.invoice().getInvoiceNumber(), sent.at("/invoice/invoiceNumber").asText());
+        assertEquals("compta@example.org", sent.at("/email/to").asText());
+    }
+
+    @Test
+    void emailEmbeddedFacturXSendsFilePartsAndEmailFields() {
+        stub.respondJson(200, ACCEPTED);
+
+        EmailSendResult result = client().emailEmbeddedFacturX(FileUpload.ofPdf(PDF), FileUpload.ofXml(XML), email()
+                .setFromName("Facturation")
+                .addCc("un@example.org")
+                .addCc("deux@example.org")
+                .addBcc("trois@example.org")
+                .setReplyTo("aide@example.com")
+                .setSubject("Facture FA-2026-0042")
+                .setMessage("Bonjour"));
+
+        assertEquals("accepted", result.getStatus());
+        assertEquals("0107019a-msg", result.getMessageId());
+        TransportRequest r = stub.last();
+        assertEquals("/v1/embed/facturx/email", r.uri().getPath());
+        assertEquals("application/json", r.header("Accept"));
+        assertTrue(r.header("Content-Type").startsWith("multipart/form-data; boundary="));
+        String body = body(r);
+        assertTrue(body.contains("name=\"pdf\"; filename=\"invoice.pdf\""));
+        assertTrue(body.contains("name=\"xml\"; filename=\"invoice.xml\""));
+        assertTrue(body.contains("name=\"email.from\"\r\n\r\nfactures@example.com\r\n"));
+        assertTrue(body.contains("name=\"email.fromName\"\r\n\r\nFacturation\r\n"));
+        assertTrue(body.contains("name=\"email.to\"\r\n\r\ncompta@example.org\r\n"));
+        assertEquals(2, count(body, "name=\"email.cc\"\r\n\r\n"));
+        assertTrue(body.contains("name=\"email.cc\"\r\n\r\nun@example.org\r\n"));
+        assertTrue(body.contains("name=\"email.cc\"\r\n\r\ndeux@example.org\r\n"));
+        assertEquals(1, count(body, "name=\"email.bcc\"\r\n\r\ntrois@example.org\r\n"));
+        assertTrue(body.contains("name=\"email.replyTo\"\r\n\r\naide@example.com\r\n"));
+        assertTrue(body.contains("name=\"email.subject\"\r\n\r\nFacture FA-2026-0042\r\n"));
+        assertTrue(body.contains("name=\"email.message\"\r\n\r\nBonjour\r\n"));
+        assertFalse(body.contains("skipValidation"));
+        assertFalse(body.contains("name=\"rules\""));
+    }
+
+    @Test
+    void emailEmbeddedFacturXOmitsUnsetFields(@TempDir Path dir) throws Exception {
+        Path pdf = dir.resolve("facture.pdf");
+        Path xml = dir.resolve("facture.xml");
+        Files.write(pdf, PDF);
+        Files.write(xml, XML.getBytes(StandardCharsets.UTF_8));
+        stub.respondJson(200, ACCEPTED);
+
+        client().emailEmbeddedFacturX(pdf, xml, email());
+
+        String body = body(stub.last());
+        assertTrue(body.contains("filename=\"facture.pdf\""));
+        assertTrue(body.contains("filename=\"facture.xml\""));
+        assertEquals(2, count(body, "name=\"email."));
+        assertTrue(body.contains("name=\"email.from\""));
+        assertTrue(body.contains("name=\"email.to\""));
+    }
+
+    @Test
+    void emailEmbeddedFacturXSendsRuleSets() {
+        stub.respondJson(200, ACCEPTED);
+
+        client().emailEmbeddedFacturX(FileUpload.ofPdf(PDF), FileUpload.ofXml(XML), email(),
+                new ValidateOptions().addRule(RuleSet.BR_FR));
+
+        assertEquals(1, count(body(stub.last()), "name=\"rules\"\r\n\r\nbr-fr\r\n"));
+    }
+
+    @Test
+    void emailRequiresAnEmailMessage() {
+        assertThrows(NullPointerException.class, () -> client().emailFacturX(Fixtures.invoice(), null));
+        assertThrows(NullPointerException.class,
+                () -> client().emailEmbeddedFacturX(FileUpload.ofPdf(PDF), FileUpload.ofXml(XML), null));
+        assertTrue(stub.requests.isEmpty());
+    }
+
+    @Test
+    void unverifiedSenderDomainSurfacesItsErrorCode() {
+        stub.respondJson(400, "{\"title\":\"Sending domain not verified\",\"detail\":\"The sending domain example.com is not verified yet.\",\"errorCode\":4022,\"traceId\":\"00-abc-def-01\"}");
+
+        InvoiceXmlApiException e = assertThrows(InvoiceXmlApiException.class,
+                () -> client().emailFacturX(Fixtures.invoice(), email()));
+
+        assertFalse(e instanceof InvoiceValidationException);
+        assertEquals(400, e.getStatusCode());
+        assertEquals(ErrorCodes.EMAIL_DOMAIN_NOT_VERIFIED, e.getErrorCode());
+        assertEquals("00-abc-def-01", e.getTraceId());
+        assertEquals(1, stub.requests.size());
+    }
+
+    @Test
+    void emailPlanAndAccountRefusalsSurfaceTheirErrorCodes() {
+        stub.respondJson(403, "{\"title\":\"Email sending not included in your plan\",\"errorCode\":4020}")
+            .respondJson(403, "{\"title\":\"Email sending disabled\",\"errorCode\":4021}");
+
+        InvoiceXmlApiException plan = assertThrows(InvoiceXmlApiException.class,
+                () -> client().emailFacturX(Fixtures.invoice(), email()));
+        InvoiceXmlApiException disabled = assertThrows(InvoiceXmlApiException.class,
+                () -> client().emailEmbeddedFacturX(FileUpload.ofPdf(PDF), FileUpload.ofXml(XML), email()));
+
+        assertEquals(ErrorCodes.EMAIL_NOT_IN_PLAN, plan.getErrorCode());
+        assertEquals(ErrorCodes.EMAIL_SENDING_DISABLED, disabled.getErrorCode());
+    }
+
+    @Test
+    void rejectedEmailFieldCarriesFindings() {
+        stub.respondJson(400, "{\"title\":\"Validation failed\",\"errorCode\":4002,\"errors\":[{\"message\":\"The sender address is not valid.\",\"fields\":[\"email.from\"]}]}");
+
+        InvoiceValidationException e = assertThrows(InvoiceValidationException.class,
+                () -> client().emailFacturX(Fixtures.invoice(), email()));
+
+        assertEquals(ErrorCodes.MODEL_VALIDATION, e.getErrorCode());
+        assertEquals(List.of("email.from"), e.getErrors().get(0).getFields());
+    }
+
+    @Test
+    void emailIsRetriedOnRateLimitWithTheSameBody() {
+        stub.respondJson(429, "{\"title\":\"Too many requests\",\"errorCode\":4019}", "Retry-After", "2")
+            .respondJson(200, ACCEPTED);
+
+        EmailSendResult result = client().emailFacturX(Fixtures.invoice(), email());
+
+        assertEquals("0107019a-msg", result.getMessageId());
+        assertEquals(List.of(Duration.ofSeconds(2)), sleeps);
+        assertEquals(2, stub.requests.size());
+        assertArrayEquals(stub.requests.get(0).body(), stub.requests.get(1).body());
+    }
+
+    @Test
+    void emailIsNotRetriedOnServerOrNetworkFailure() {
+        stub.respondJson(503, "{\"title\":\"Service unavailable\"}");
+        assertThrows(InvoiceXmlApiException.class, () -> client().emailFacturX(Fixtures.invoice(), email()));
+        assertEquals(1, stub.requests.size());
+
+        stub.fail(new IOException("connection reset"));
+        assertThrows(InvoiceXmlConnectionException.class,
+                () -> client().emailEmbeddedFacturX(FileUpload.ofPdf(PDF), FileUpload.ofXml(XML), email()));
+        assertEquals(2, stub.requests.size());
+        assertTrue(sleeps.isEmpty());
+    }
+
+    @Test
+    void blankCopyAddressesAreDroppedOnBothRouteTypes() throws Exception {
+        stub.respondJson(200, ACCEPTED).respondJson(200, ACCEPTED);
+        EmailMessage email = email().setCc(List.of(" ", " one@example.org ")).setBcc(List.of(""));
+
+        client().emailFacturX(Fixtures.invoice(), email);
+        client().emailEmbeddedFacturX(FileUpload.ofPdf(PDF), FileUpload.ofXml(XML), email);
+
+        JsonNode sent = json.readTree(stub.requests.get(0).body()).get("email");
+        assertEquals(1, sent.get("cc").size());
+        assertEquals("one@example.org", sent.at("/cc/0").asText());
+        assertFalse(sent.has("bcc"), "a list left empty must be omitted");
+        String form = body(stub.requests.get(1));
+        assertEquals(1, count(form, "name=\"email.cc\""));
+        assertTrue(form.contains("name=\"email.cc\"\r\n\r\none@example.org\r\n"));
+        assertFalse(form.contains("name=\"email.bcc\""));
     }
 
     // ------------------------------------------------------------ extract

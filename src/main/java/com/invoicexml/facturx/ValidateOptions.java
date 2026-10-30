@@ -6,7 +6,8 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * Options for {@link FacturXClient#validateFacturX(FileUpload, ValidateOptions)}.
+ * Options for {@link FacturXClient#validateFacturX(FileUpload, ValidateOptions)} and
+ * {@link FacturXClient#emailEmbeddedFacturX(FileUpload, FileUpload, com.invoicexml.facturx.email.EmailMessage, ValidateOptions)}.
  */
 public final class ValidateOptions {
 
