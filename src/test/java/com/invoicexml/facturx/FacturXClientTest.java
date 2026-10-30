@@ -19,6 +19,7 @@ import com.invoicexml.facturx.model.PdfLanguage;
 import com.invoicexml.facturx.model.RuleSet;
 import com.invoicexml.facturx.transport.TransportRequest;
 import com.invoicexml.facturx.validation.ValidationFinding;
+import com.invoicexml.facturx.validation.ValidationReport;
 import com.invoicexml.facturx.validation.ValidationResult;
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -32,6 +33,8 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Supplier;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -453,6 +456,286 @@ class FacturXClientTest {
         assertFalse(form.contains("name=\"email.bcc\""));
     }
 
+    // ------------------------------------------------------------- render
+
+    @Test
+    void renderCiiPostsToItsRouteAndReturnsPdf(@TempDir Path dir) throws Exception {
+        Path xml = dir.resolve("factur-x.xml");
+        Files.write(xml, XML.getBytes(StandardCharsets.UTF_8));
+        stub.respond(200, "application/pdf", PDF);
+
+        assertArrayEquals(PDF, client().renderCiiToPdf(xml));
+
+        assertEquals("/v1/render/cii/to/pdf", stub.last().uri().getPath());
+        String body = body(stub.last());
+        assertTrue(body.contains("name=\"file\"; filename=\"factur-x.xml\""));
+        assertEquals(1, count(body, "form-data; name="), "unset options must be omitted");
+    }
+
+    @Test
+    void renderCiiSendsOptions() {
+        stub.respond(200, "application/pdf", PDF);
+
+        client().renderCiiToPdf(FileUpload.ofXml(XML), new RenderOptions()
+                .setLanguage(PdfLanguage.FR)
+                .setLogoUrl("https://example.com/logo.png")
+                .setIncludeQrCode(true));
+
+        String body = body(stub.last());
+        assertTrue(body.contains("name=\"language\"\r\n\r\nfr\r\n"));
+        assertTrue(body.contains("name=\"logoUrl\"\r\n\r\nhttps://example.com/logo.png\r\n"));
+        assertTrue(body.contains("name=\"includeQrCode\"\r\n\r\ntrue\r\n"));
+    }
+
+    @Test
+    void renderSendsQrCodeOnlyWhenSet() {
+        stub.respond(200, "application/pdf", PDF).respond(200, "application/pdf", PDF);
+
+        client().renderCiiToPdf(FileUpload.ofXml(XML), new RenderOptions().setIncludeQrCode(false));
+        client().renderCiiToPdf(FileUpload.ofXml(XML), new RenderOptions());
+
+        assertTrue(body(stub.requests.get(0)).contains("name=\"includeQrCode\"\r\n\r\nfalse\r\n"));
+        assertFalse(body(stub.requests.get(1)).contains("includeQrCode"));
+    }
+
+    // ------------------------------------------------------------ convert
+
+    private void assertConvertsToXml(String route, Supplier<String> call) {
+        stub.respond(200, "application/xml", XML.getBytes(StandardCharsets.UTF_8));
+
+        assertEquals(XML, call.get());
+
+        assertEquals(route, stub.last().uri().getPath());
+        String body = body(stub.last());
+        assertTrue(body.contains("form-data; name=\"file\"; filename="));
+        assertEquals(1, count(body, "form-data; name="), "unset options must be omitted");
+    }
+
+    private void assertConvertsToPdf(String route, Supplier<byte[]> call) {
+        stub.respond(200, "application/pdf", PDF);
+
+        assertArrayEquals(PDF, call.get());
+
+        assertEquals(route, stub.last().uri().getPath());
+        String body = body(stub.last());
+        assertTrue(body.contains("form-data; name=\"file\"; filename="));
+        assertEquals(1, count(body, "form-data; name="), "unset options must be omitted");
+    }
+
+    @Test
+    void convertRoutesToXmlPostTheFileAndReturnXml() {
+        FacturXClient c = client();
+        FileUpload pdf = FileUpload.ofPdf(PDF);
+
+        assertConvertsToXml("/v1/convert/facturx/to/ubl", () -> c.convertFacturXToUbl(pdf));
+        assertConvertsToXml("/v1/convert/facturx/to/cii", () -> c.convertFacturXToCii(pdf));
+    }
+
+    @Test
+    void convertRoutesToFacturXPostTheFileAndReturnPdf() {
+        FacturXClient c = client();
+        FileUpload xml = FileUpload.ofXml(XML);
+
+        assertConvertsToPdf("/v1/convert/cii/to/facturx", () -> c.convertCiiToFacturX(xml));
+        assertConvertsToPdf("/v1/convert/ubl/to/facturx", () -> c.convertUblToFacturX(xml));
+        assertConvertsToPdf("/v1/convert/xrechnung/to/facturx", () -> c.convertXRechnungToFacturX(xml));
+    }
+
+    @Test
+    void convertTakesPaths(@TempDir Path dir) throws Exception {
+        Path pdf = dir.resolve("facture.pdf");
+        Path xml = dir.resolve("facture.xml");
+        Files.write(pdf, PDF);
+        Files.write(xml, XML.getBytes(StandardCharsets.UTF_8));
+        FacturXClient c = client();
+
+        assertConvertsToXml("/v1/convert/facturx/to/cii", () -> c.convertFacturXToCii(pdf));
+        assertTrue(body(stub.last()).contains("filename=\"facture.pdf\""));
+        assertConvertsToPdf("/v1/convert/xrechnung/to/facturx", () -> c.convertXRechnungToFacturX(xml));
+        assertTrue(body(stub.last()).contains("filename=\"facture.xml\""));
+    }
+
+    @Test
+    void convertToXmlSendsValidationLanguageAndNoLanguage() {
+        stub.respond(200, "application/xml", XML.getBytes(StandardCharsets.UTF_8));
+
+        client().convertFacturXToUbl(FileUpload.ofPdf(PDF), new ConvertOptions().setValidationLanguage(PdfLanguage.FR));
+
+        String body = body(stub.last());
+        assertTrue(body.contains("name=\"validationLanguage\"\r\n\r\nfr\r\n"));
+        assertFalse(body.contains("name=\"language\""));
+    }
+
+    @Test
+    void convertToFacturXSendsLanguageAndValidationLanguage() {
+        stub.respond(200, "application/pdf", PDF);
+
+        client().convertCiiToFacturX(FileUpload.ofXml(XML), new ConvertToPdfOptions()
+                .setLanguage(PdfLanguage.FR)
+                .setValidationLanguage(PdfLanguage.DE));
+
+        String body = body(stub.last());
+        assertTrue(body.contains("name=\"language\"\r\n\r\nfr\r\n"));
+        assertTrue(body.contains("name=\"validationLanguage\"\r\n\r\nde\r\n"));
+    }
+
+    @Test
+    void convertRejectionCarriesFindings() {
+        stub.respondJson(400, Fixtures.resource("create-400.json"));
+
+        InvoiceValidationException e = assertThrows(InvoiceValidationException.class,
+                () -> client().convertUblToFacturX(FileUpload.ofXml(XML)));
+
+        assertEquals(ErrorCodes.MODEL_VALIDATION, e.getErrorCode());
+        assertEquals("BR-CO-26", e.getErrors().get(0).getRule());
+    }
+
+    @Test
+    void convertOfAPdfWithoutXmlSurfacesItsErrorCode() {
+        stub.respondJson(400, "{\"title\":\"No embedded XML\",\"errorCode\":4006}");
+
+        InvoiceXmlApiException e = assertThrows(InvoiceXmlApiException.class,
+                () -> client().convertFacturXToUbl(FileUpload.ofPdf(PDF)));
+
+        assertEquals(ErrorCodes.NO_EMBEDDED_XML, e.getErrorCode());
+    }
+
+    // ------------------------------------------------------------- report
+
+    @Test
+    void validateFacturXReportReturnsPdfAndPassedVerdict(@TempDir Path dir) throws Exception {
+        Path pdf = dir.resolve("facture.pdf");
+        Files.write(pdf, PDF);
+        stub.respond(200, "application/pdf", PDF, "X-Invoice-Valid", "true");
+
+        ValidationReport report = client().validateFacturXReport(pdf);
+
+        assertArrayEquals(PDF, report.getFile());
+        assertEquals(Boolean.TRUE, report.getValid());
+        assertEquals("/v1/validate/facturx/report", stub.last().uri().getPath());
+        String body = body(stub.last());
+        assertTrue(body.contains("name=\"file\"; filename=\"facture.pdf\""));
+        assertEquals(1, count(body, "form-data; name="), "unset options must be omitted");
+    }
+
+    @Test
+    void validateFacturXReportReturnsFailedVerdictWithoutThrowing() {
+        stub.respond(200, "application/pdf", PDF, "X-Invoice-Valid", "false");
+
+        ValidationReport report = client().validateFacturXReport(FileUpload.ofPdf(PDF));
+
+        assertArrayEquals(PDF, report.getFile());
+        assertEquals(Boolean.FALSE, report.getValid());
+    }
+
+    @Test
+    void reportVerdictIsNullWhenTheHeaderIsMissingOrUnreadable() {
+        stub.respond(200, "application/pdf", PDF).respond(200, "application/pdf", PDF, "X-Invoice-Valid", "maybe");
+
+        assertNull(client().validateFacturXReport(FileUpload.ofPdf(PDF)).getValid());
+        assertNull(client().validateFacturXReport(FileUpload.ofPdf(PDF)).getValid());
+    }
+
+    @Test
+    void reportHeaderNameIsMatchedCaseInsensitively() {
+        stub.respond(200, "application/pdf", PDF, "x-invoice-valid", "true");
+
+        assertEquals(Boolean.TRUE, client().validateFacturXReport(FileUpload.ofPdf(PDF)).getValid());
+    }
+
+    @Test
+    void reportSendsOnePartPerRuleAndTheValidationLanguage() {
+        stub.respond(200, "application/pdf", PDF, "X-Invoice-Valid", "true");
+
+        client().validateFacturXReport(FileUpload.ofPdf(PDF), new ReportOptions()
+                .addRule(RuleSet.BR_FR)
+                .addRule(RuleSet.BR_FR)
+                .setValidationLanguage(PdfLanguage.FR));
+
+        String body = body(stub.last());
+        assertEquals(2, count(body, "name=\"rules\"\r\n\r\nbr-fr\r\n"));
+        assertTrue(body.contains("name=\"validationLanguage\"\r\n\r\nfr\r\n"));
+    }
+
+    @Test
+    void reportTransportProblemRaisesTheUsualException() {
+        stub.respondJson(400, "{\"title\":\"Missing file\",\"errorCode\":4003}");
+
+        InvoiceXmlApiException e = assertThrows(InvoiceXmlApiException.class,
+                () -> client().validateFacturXReport(FileUpload.ofPdf(new byte[0])));
+
+        assertEquals(ErrorCodes.MISSING_FILE, e.getErrorCode());
+    }
+
+    // ---------------------------------------------------------- transform
+
+    @Test
+    void transformToFacturXOmitsUnsetOptions(@TempDir Path dir) throws Exception {
+        Path pdf = dir.resolve("invoice.pdf");
+        Files.write(pdf, PDF);
+        stub.respond(200, "application/pdf", PDF).respond(200, "application/pdf", PDF);
+
+        assertArrayEquals(PDF, client().transformToFacturX(pdf));
+        client().transformToFacturX(FileUpload.ofPdf(PDF), new TransformOptions());
+
+        assertEquals("/v1/transform/to/facturx", stub.last().uri().getPath());
+        for (TransportRequest r : stub.requests) {
+            assertEquals(1, count(body(r), "form-data; name="), "unset options must be omitted");
+        }
+    }
+
+    @Test
+    void transformToFacturXSendsEveryOption() {
+        stub.respond(200, "application/pdf", PDF);
+
+        client().transformToFacturX(FileUpload.ofPdf(PDF), new TransformOptions()
+                .setLanguage(PdfLanguage.FR)
+                .setPreserveOriginalPdf(true)
+                .setIncludeAdvancedProperties(true)
+                .setValidationLanguage(PdfLanguage.DE));
+
+        String body = body(stub.last());
+        assertTrue(body.contains("name=\"language\"\r\n\r\nfr\r\n"));
+        assertTrue(body.contains("name=\"preserveOriginalPdf\"\r\n\r\ntrue\r\n"));
+        assertTrue(body.contains("name=\"includeAdvancedProperties\"\r\n\r\ntrue\r\n"));
+        assertTrue(body.contains("name=\"validationLanguage\"\r\n\r\nde\r\n"));
+    }
+
+    @Test
+    void transformCanTurnOffTheDetailsSection() {
+        stub.respond(200, "application/pdf", PDF);
+
+        client().transformToFacturX(FileUpload.ofPdf(PDF), new TransformOptions().setIncludeAdvancedProperties(false));
+
+        String body = body(stub.last());
+        assertTrue(body.contains("name=\"includeAdvancedProperties\"\r\n\r\nfalse\r\n"));
+        assertFalse(body.contains("preserveOriginalPdf"));
+    }
+
+    @Test
+    void transformRateLimitMakesOneRequestAndThrows() {
+        stub.respondJson(429, "{\"title\":\"Too many requests\",\"errorCode\":4019}", "Retry-After", "2");
+
+        RateLimitException e = assertThrows(RateLimitException.class,
+                () -> client().transformToFacturX(FileUpload.ofPdf(PDF)));
+
+        assertEquals(1, stub.requests.size());
+        assertEquals("/v1/transform/to/facturx", stub.last().uri().getPath());
+        assertTrue(sleeps.isEmpty());
+        assertEquals(Duration.ofSeconds(2), e.getRetryAfter());
+        assertEquals(ErrorCodes.TOO_MANY_REQUESTS, e.getErrorCode());
+    }
+
+    @Test
+    void transformRejectionCarriesFindings() {
+        stub.respondJson(400, Fixtures.resource("create-400.json"));
+
+        InvoiceValidationException e = assertThrows(InvoiceValidationException.class,
+                () -> client().transformToFacturX(FileUpload.ofPdf(PDF)));
+
+        assertEquals(ErrorCodes.MODEL_VALIDATION, e.getErrorCode());
+    }
+
     // ------------------------------------------------------------ extract
 
     @Test
@@ -506,6 +789,24 @@ class FacturXClientTest {
         client().createFacturX(Fixtures.invoice());
 
         assertEquals(List.of(Duration.ofSeconds(5)), sleeps);
+    }
+
+    @Test
+    void renderConvertAndReportRetryAfterRateLimit() {
+        stub.respondJson(429, "{}", "Retry-After", "1").respond(200, "application/pdf", PDF);
+        stub.respondJson(429, "{}", "Retry-After", "1").respond(200, "application/xml", XML.getBytes(StandardCharsets.UTF_8));
+        stub.respondJson(429, "{}", "Retry-After", "1").respond(200, "application/pdf", PDF, "X-Invoice-Valid", "true");
+
+        client().renderCiiToPdf(FileUpload.ofXml(XML));
+        client().convertFacturXToUbl(FileUpload.ofPdf(PDF));
+        client().validateFacturXReport(FileUpload.ofPdf(PDF));
+
+        assertEquals(List.of(
+                "/v1/render/cii/to/pdf", "/v1/render/cii/to/pdf",
+                "/v1/convert/facturx/to/ubl", "/v1/convert/facturx/to/ubl",
+                "/v1/validate/facturx/report", "/v1/validate/facturx/report"),
+            stub.requests.stream().map(request -> request.uri().getPath()).collect(Collectors.toList()));
+        assertEquals(3, sleeps.size());
     }
 
     @Test

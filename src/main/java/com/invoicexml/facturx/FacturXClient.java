@@ -7,21 +7,25 @@ import com.invoicexml.facturx.email.EmailSendResult;
 import com.invoicexml.facturx.model.CreateInvoiceRequest;
 import com.invoicexml.facturx.model.InvoiceDocument;
 import com.invoicexml.facturx.model.InvoiceOptions;
+import com.invoicexml.facturx.model.PdfLanguage;
 import com.invoicexml.facturx.model.RuleSet;
 import com.invoicexml.facturx.transport.HttpTransport;
 import com.invoicexml.facturx.transport.JdkHttpTransport;
 import com.invoicexml.facturx.transport.TransportRequest;
 import com.invoicexml.facturx.transport.TransportResponse;
+import com.invoicexml.facturx.validation.ValidationReport;
 import com.invoicexml.facturx.validation.ValidationResult;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Properties;
@@ -42,7 +46,7 @@ import java.util.Properties;
  * under the French mandate, add {@link RuleSet#BR_FR} to apply the BR-FR rules too.
  *
  * <p>HTTP 429 responses are retried automatically after the {@code Retry-After}
- * delay. Other errors raise an {@link InvoiceXmlApiException} subclass, and
+ * delay, except on transform calls. Other errors raise an {@link InvoiceXmlApiException} subclass, and
  * network failures raise an {@link InvoiceXmlConnectionException}. All are unchecked.
  *
  * <p>Instances are immutable and thread-safe. Create one and share it.
@@ -185,6 +189,48 @@ public final class FacturXClient {
         return postMultipartForJson("/v1/validate/facturx", form, ValidationResult.class);
     }
 
+    /**
+     * Validates a Factur-X PDF like {@link #validateFacturX(Path)} and returns a printable
+     * PDF report with the verdict. An invalid invoice is a normal result, not an
+     * exception, and so is a PDF without embedded XML, which gets a report saying so.
+     *
+     * @param pdf the PDF file
+     * @return the report; check {@link ValidationReport#getValid()}
+     */
+    public ValidationReport validateFacturXReport(Path pdf) {
+        return validateFacturXReport(FileUpload.of(pdf), null);
+    }
+
+    /**
+     * Validates a Factur-X PDF upload and returns a printable PDF report with the verdict.
+     *
+     * @param pdf the PDF upload
+     * @return the report; check {@link ValidationReport#getValid()}
+     * @see #validateFacturXReport(Path)
+     */
+    public ValidationReport validateFacturXReport(FileUpload pdf) {
+        return validateFacturXReport(pdf, null);
+    }
+
+    /**
+     * Validates a Factur-X PDF upload and returns a printable PDF report with options,
+     * for example the French mandate's BR-FR rules on top of the profile rules.
+     *
+     * @param pdf the PDF upload
+     * @param options the options, or {@code null} for the defaults
+     * @return the report; check {@link ValidationReport#getValid()}
+     * @see #validateFacturXReport(Path)
+     */
+    public ValidationReport validateFacturXReport(FileUpload pdf, ReportOptions options) {
+        Multipart form = new Multipart().file("file", pdf);
+        if (options != null) {
+            addRules(form, options.getRules());
+            form.field("validationLanguage", language(options.getValidationLanguage()));
+        }
+        TransportResponse response = postMultipart("/v1/validate/facturx/report", form, null);
+        return new ValidationReport(response.body(), verdict(response.header("X-Invoice-Valid")));
+    }
+
     // ----------------------------------------------------------------- embed
 
     /**
@@ -246,9 +292,8 @@ public final class FacturXClient {
      * delivery, not that the recipient's server has received it yet.
      *
      * <p>Only HTTP 429 is retried, because nothing was sent. After an
-     * {@link InvoiceXmlConnectionException}, or a 503 with
-     * {@link ErrorCodes#PROCESSING_TIMEOUT}, which can happen while the send is in
-     * flight, the email may or may not have gone out, so check before you send it again.
+     * {@link InvoiceXmlConnectionException} the email may or may not have gone out,
+     * so check before you send it again.
      *
      * @param invoice the invoice
      * @param email the sender, recipient and optional texts
@@ -350,6 +395,299 @@ public final class FacturXClient {
         return postMultipartForJson("/v1/embed/facturx/email", form, EmailSendResult.class);
     }
 
+    // ---------------------------------------------------------------- render
+
+    /**
+     * Renders a CII invoice XML, such as the XML of a Factur-X invoice, as a
+     * human-readable PDF.
+     *
+     * @param xml the CII XML file
+     * @return the PDF bytes
+     */
+    public byte[] renderCiiToPdf(Path xml) {
+        return renderCiiToPdf(FileUpload.of(xml), null);
+    }
+
+    /**
+     * Renders a CII invoice XML upload as a human-readable PDF.
+     *
+     * @param xml the CII XML upload
+     * @return the PDF bytes
+     * @see #renderCiiToPdf(Path)
+     */
+    public byte[] renderCiiToPdf(FileUpload xml) {
+        return renderCiiToPdf(xml, null);
+    }
+
+    /**
+     * Renders a CII invoice XML upload as a human-readable PDF with options.
+     *
+     * @param xml the CII XML upload
+     * @param options the options, or {@code null} for the defaults
+     * @return the PDF bytes
+     * @see #renderCiiToPdf(Path)
+     */
+    public byte[] renderCiiToPdf(FileUpload xml, RenderOptions options) {
+        Multipart form = new Multipart().file("file", xml);
+        if (options != null) {
+            form.field("language", language(options.getLanguage()));
+            form.field("logoUrl", options.getLogoUrl());
+            form.field("includeQrCode", flag(options.getIncludeQrCode()));
+        }
+        return postMultipart("/v1/render/cii/to/pdf", form, null).body();
+    }
+
+    // --------------------------------------------------------------- convert
+
+    /**
+     * Converts a Factur-X PDF to UBL 2.1 XML. The XML embedded in the PDF is read and
+     * transcoded, and the result is validated before it is returned.
+     *
+     * @param pdf the Factur-X PDF
+     * @return the XML document
+     * @throws InvoiceValidationException when the result violates the rule set
+     * @throws InvoiceXmlApiException with {@link ErrorCodes#NO_EMBEDDED_XML} when the PDF carries no XML
+     */
+    public String convertFacturXToUbl(Path pdf) {
+        return convertFacturXToUbl(FileUpload.of(pdf), null);
+    }
+
+    /**
+     * Converts a Factur-X PDF upload to UBL 2.1 XML.
+     *
+     * @param pdf the Factur-X PDF upload
+     * @return the XML document
+     * @throws InvoiceValidationException when the result violates the rule set
+     * @see #convertFacturXToUbl(Path)
+     */
+    public String convertFacturXToUbl(FileUpload pdf) {
+        return convertFacturXToUbl(pdf, null);
+    }
+
+    /**
+     * Converts a Factur-X PDF upload to UBL 2.1 XML with options.
+     *
+     * @param pdf the Factur-X PDF upload
+     * @param options the options, or {@code null} for the defaults
+     * @return the XML document
+     * @throws InvoiceValidationException when the result violates the rule set
+     * @see #convertFacturXToUbl(Path)
+     */
+    public String convertFacturXToUbl(FileUpload pdf, ConvertOptions options) {
+        return convertToXml("/v1/convert/facturx/to/ubl", pdf, options);
+    }
+
+    /**
+     * Converts a Factur-X PDF to CII XML. The XML embedded in the PDF is read and
+     * rebuilt, and the result is validated before it is returned.
+     *
+     * @param pdf the Factur-X PDF
+     * @return the XML document
+     * @throws InvoiceValidationException when the result violates the rule set
+     * @throws InvoiceXmlApiException with {@link ErrorCodes#NO_EMBEDDED_XML} when the PDF carries no XML
+     */
+    public String convertFacturXToCii(Path pdf) {
+        return convertFacturXToCii(FileUpload.of(pdf), null);
+    }
+
+    /**
+     * Converts a Factur-X PDF upload to CII XML.
+     *
+     * @param pdf the Factur-X PDF upload
+     * @return the XML document
+     * @throws InvoiceValidationException when the result violates the rule set
+     * @see #convertFacturXToCii(Path)
+     */
+    public String convertFacturXToCii(FileUpload pdf) {
+        return convertFacturXToCii(pdf, null);
+    }
+
+    /**
+     * Converts a Factur-X PDF upload to CII XML with options.
+     *
+     * @param pdf the Factur-X PDF upload
+     * @param options the options, or {@code null} for the defaults
+     * @return the XML document
+     * @throws InvoiceValidationException when the result violates the rule set
+     * @see #convertFacturXToCii(Path)
+     */
+    public String convertFacturXToCii(FileUpload pdf, ConvertOptions options) {
+        return convertToXml("/v1/convert/facturx/to/cii", pdf, options);
+    }
+
+    /**
+     * Converts CII XML to a Factur-X PDF/A-3: a PDF is rendered from the invoice and
+     * the XML embedded into it, after validation with the full rule set.
+     *
+     * @param xml the CII XML
+     * @return the hybrid PDF bytes
+     * @throws InvoiceValidationException when the result violates the rule set
+     */
+    public byte[] convertCiiToFacturX(Path xml) {
+        return convertCiiToFacturX(FileUpload.of(xml), null);
+    }
+
+    /**
+     * Converts a CII XML upload to a Factur-X PDF/A-3.
+     *
+     * @param xml the CII XML upload
+     * @return the hybrid PDF bytes
+     * @throws InvoiceValidationException when the result violates the rule set
+     * @see #convertCiiToFacturX(Path)
+     */
+    public byte[] convertCiiToFacturX(FileUpload xml) {
+        return convertCiiToFacturX(xml, null);
+    }
+
+    /**
+     * Converts a CII XML upload to a Factur-X PDF/A-3 with options.
+     *
+     * @param xml the CII XML upload
+     * @param options the options, or {@code null} for the defaults
+     * @return the hybrid PDF bytes
+     * @throws InvoiceValidationException when the result violates the rule set
+     * @see #convertCiiToFacturX(Path)
+     */
+    public byte[] convertCiiToFacturX(FileUpload xml, ConvertToPdfOptions options) {
+        return convertToPdf("/v1/convert/cii/to/facturx", xml, options);
+    }
+
+    /**
+     * Converts UBL 2.1 XML to a Factur-X PDF/A-3: a PDF is rendered from the invoice
+     * and the invoice embedded into it as CII XML, after validation with the full rule set.
+     *
+     * @param xml the UBL XML
+     * @return the hybrid PDF bytes
+     * @throws InvoiceValidationException when the result violates the rule set
+     */
+    public byte[] convertUblToFacturX(Path xml) {
+        return convertUblToFacturX(FileUpload.of(xml), null);
+    }
+
+    /**
+     * Converts a UBL 2.1 XML upload to a Factur-X PDF/A-3.
+     *
+     * @param xml the UBL XML upload
+     * @return the hybrid PDF bytes
+     * @throws InvoiceValidationException when the result violates the rule set
+     * @see #convertUblToFacturX(Path)
+     */
+    public byte[] convertUblToFacturX(FileUpload xml) {
+        return convertUblToFacturX(xml, null);
+    }
+
+    /**
+     * Converts a UBL 2.1 XML upload to a Factur-X PDF/A-3 with options.
+     *
+     * @param xml the UBL XML upload
+     * @param options the options, or {@code null} for the defaults
+     * @return the hybrid PDF bytes
+     * @throws InvoiceValidationException when the result violates the rule set
+     * @see #convertUblToFacturX(Path)
+     */
+    public byte[] convertUblToFacturX(FileUpload xml, ConvertToPdfOptions options) {
+        return convertToPdf("/v1/convert/ubl/to/facturx", xml, options);
+    }
+
+    /**
+     * Converts an XRechnung (UBL or CII) to a Factur-X PDF/A-3: a PDF is rendered from
+     * the invoice and the invoice embedded into it as CII XML, after validation with
+     * the full rule set.
+     *
+     * @param xml the XRechnung XML
+     * @return the hybrid PDF bytes
+     * @throws InvoiceValidationException when the result violates the rule set
+     */
+    public byte[] convertXRechnungToFacturX(Path xml) {
+        return convertXRechnungToFacturX(FileUpload.of(xml), null);
+    }
+
+    /**
+     * Converts an XRechnung upload to a Factur-X PDF/A-3.
+     *
+     * @param xml the XRechnung XML upload
+     * @return the hybrid PDF bytes
+     * @throws InvoiceValidationException when the result violates the rule set
+     * @see #convertXRechnungToFacturX(Path)
+     */
+    public byte[] convertXRechnungToFacturX(FileUpload xml) {
+        return convertXRechnungToFacturX(xml, null);
+    }
+
+    /**
+     * Converts an XRechnung upload to a Factur-X PDF/A-3 with options.
+     *
+     * @param xml the XRechnung XML upload
+     * @param options the options, or {@code null} for the defaults
+     * @return the hybrid PDF bytes
+     * @throws InvoiceValidationException when the result violates the rule set
+     * @see #convertXRechnungToFacturX(Path)
+     */
+    public byte[] convertXRechnungToFacturX(FileUpload xml, ConvertToPdfOptions options) {
+        return convertToPdf("/v1/convert/xrechnung/to/facturx", xml, options);
+    }
+
+    // ------------------------------------------------------------- transform
+
+    /**
+     * Reads a PDF invoice and returns a Factur-X PDF/A-3. AI reads the PDF, so a person
+     * must check the result before it is used.
+     *
+     * <p>By default the PDF is rendered fresh from the data read and ends with an
+     * Electronic invoice details section, so the technical values can be checked on
+     * the pages.
+     *
+     * <p>A 429 on this method is not retried automatically, so wait for
+     * {@code Retry-After} before calling again if you want to retry.
+     *
+     * @param pdf the PDF invoice
+     * @return the hybrid PDF bytes
+     * @throws InvoiceValidationException when the result violates the rule set
+     */
+    public byte[] transformToFacturX(Path pdf) {
+        return transformToFacturX(FileUpload.of(pdf), null);
+    }
+
+    /**
+     * Reads a PDF invoice upload and returns a Factur-X PDF/A-3. AI reads the PDF, so a
+     * person must check the result before it is used.
+     *
+     * <p>A 429 on this method is not retried automatically, so wait for
+     * {@code Retry-After} before calling again if you want to retry.
+     *
+     * @param pdf the PDF upload
+     * @return the hybrid PDF bytes
+     * @throws InvoiceValidationException when the result violates the rule set
+     * @see #transformToFacturX(Path)
+     */
+    public byte[] transformToFacturX(FileUpload pdf) {
+        return transformToFacturX(pdf, null);
+    }
+
+    /**
+     * Reads a PDF invoice upload and returns a Factur-X PDF/A-3 with options. AI reads
+     * the PDF, so a person must check the result before it is used.
+     *
+     * <p>A 429 on this method is not retried automatically, so wait for
+     * {@code Retry-After} before calling again if you want to retry.
+     *
+     * @param pdf the PDF upload
+     * @param options the options, or {@code null} for the defaults
+     * @return the hybrid PDF bytes
+     * @throws InvoiceValidationException when the result violates the rule set
+     * @see #transformToFacturX(Path)
+     */
+    public byte[] transformToFacturX(FileUpload pdf, TransformOptions options) {
+        Multipart form = new Multipart().file("file", pdf);
+        if (options != null) {
+            form.field("language", language(options.getLanguage()));
+            form.field("preserveOriginalPdf", flag(options.getPreserveOriginalPdf()));
+            form.field("includeAdvancedProperties", flag(options.getIncludeAdvancedProperties()));
+            form.field("validationLanguage", language(options.getValidationLanguage()));
+        }
+        return postMultipartOnce("/v1/transform/to/facturx", form).body();
+    }
+
     // --------------------------------------------------------------- extract
 
     /**
@@ -401,6 +739,41 @@ public final class FacturXClient {
     }
 
     // -------------------------------------------------------------- plumbing
+
+    private String convertToXml(String path, FileUpload file, ConvertOptions options) {
+        Multipart form = new Multipart().file("file", file);
+        if (options != null) {
+            form.field("validationLanguage", language(options.getValidationLanguage()));
+        }
+        return new String(postMultipart(path, form, null).body(), StandardCharsets.UTF_8);
+    }
+
+    private byte[] convertToPdf(String path, FileUpload xml, ConvertToPdfOptions options) {
+        Multipart form = new Multipart().file("file", xml);
+        if (options != null) {
+            form.field("language", language(options.getLanguage()));
+            form.field("validationLanguage", language(options.getValidationLanguage()));
+        }
+        return postMultipart(path, form, null).body();
+    }
+
+    /** The verdict header's value, {@code null} when it is missing or says neither. */
+    private static Boolean verdict(String header) {
+        if ("true".equalsIgnoreCase(header)) {
+            return Boolean.TRUE;
+        }
+        return "false".equalsIgnoreCase(header) ? Boolean.FALSE : null;
+    }
+
+    /** The form value of a language, {@code null} (not sent) when unset. */
+    private static String language(PdfLanguage language) {
+        return language == null ? null : language.name().toLowerCase(Locale.ROOT);
+    }
+
+    /** The form value of a switch, {@code null} (not sent) when unset. */
+    private static String flag(Boolean value) {
+        return value == null ? null : value.toString();
+    }
 
     private static void addRules(Multipart form, List<RuleSet> rules) {
         if (rules == null) {
@@ -474,6 +847,10 @@ public final class FacturXClient {
         return execute(path, form.contentType(), form.build(), accept);
     }
 
+    private TransportResponse postMultipartOnce(String path, Multipart form) {
+        return execute(path, form.contentType(), form.build(), null, 0);
+    }
+
     private <T> T postMultipartForJson(String path, Multipart form, Class<T> type) {
         return readJson(path, postMultipart(path, form, "application/json"), type);
     }
@@ -487,6 +864,10 @@ public final class FacturXClient {
     }
 
     private TransportResponse execute(String path, String contentType, byte[] body, String accept) {
+        return execute(path, contentType, body, accept, maxRetries);
+    }
+
+    private TransportResponse execute(String path, String contentType, byte[] body, String accept, int retries) {
         Map<String, String> headers = new LinkedHashMap<>();
         headers.put("Authorization", "Bearer " + apiKey);
         headers.put("Content-Type", contentType);
@@ -510,7 +891,7 @@ public final class FacturXClient {
             if (status >= 200 && status < 300) {
                 return response;
             }
-            if (status == 429 && attempt < maxRetries) {
+            if (status == 429 && attempt < retries) {
                 Duration wait = RetryAfter.parse(response.header("Retry-After"), clock);
                 if (wait == null) {
                     wait = Duration.ofSeconds(1L << Math.min(attempt, 5));
@@ -631,7 +1012,8 @@ public final class FacturXClient {
 
         /**
          * Sets how many times a request answered with HTTP 429 is retried after the
-         * {@code Retry-After} delay. Defaults to 3. Use 0 to disable retries.
+         * {@code Retry-After} delay, on every call except transform. Defaults to 3.
+         * Use 0 to disable retries.
          *
          * @param maxRetries the number of retries
          * @return this builder

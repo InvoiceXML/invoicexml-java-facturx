@@ -1,12 +1,12 @@
 # InvoiceXML Factur-X client for Java
 
-Create, validate, embed and extract **Factur-X** e-invoices from Java with the [InvoiceXML API](https://www.invoicexml.com). Build the invoice from typed EN 16931 models and get back a compliant Factur-X PDF/A-3, already validated against the official rule set and, on request, the French mandate's BR-FR rules.
+Create, validate, embed, render, convert and extract **Factur-X** e-invoices from Java with the [InvoiceXML API](https://www.invoicexml.com). Build the invoice from typed EN 16931 models and get back a compliant Factur-X PDF/A-3, already validated against the official rule set and, on request, the French mandate's BR-FR rules.
 
 - Java 11 or later, `java.net.http.HttpClient`, Jackson as the only dependency
 - Typed EN 16931 invoice model generated from the API's OpenAPI schema
 - All Factur-X profiles, from MINIMUM to EXTENDED
 - Rejected invoices surface the violated rules as typed findings
-- Automatic retry on HTTP 429, honouring `Retry-After`
+- Automatic retry on HTTP 429 on every call except transform, honouring `Retry-After`
 
 ## Installation
 
@@ -63,9 +63,17 @@ Totals and the VAT breakdown are calculated from the lines. The PDF is a Factur-
 |---|---|---|
 | `createFacturX(invoice[, options])` | `POST /v1/create/facturx` | Factur-X PDF/A-3 (`byte[]`) |
 | `validateFacturX(pdf[, options])` | `POST /v1/validate/facturx` | `ValidationResult` |
+| `validateFacturXReport(pdf[, options])` | `POST /v1/validate/facturx/report` | `ValidationReport` |
 | `embedFacturX(pdf, xml[, options])` | `POST /v1/embed/facturx` | Factur-X PDF/A-3 (`byte[]`) |
 | `emailFacturX(invoice, email[, options])` | `POST /v1/create/facturx/email` | `EmailSendResult` |
 | `emailEmbeddedFacturX(pdf, xml, email[, options])` | `POST /v1/embed/facturx/email` | `EmailSendResult` |
+| `renderCiiToPdf(xml[, options])` | `POST /v1/render/cii/to/pdf` | Readable PDF (`byte[]`) |
+| `convertFacturXToUbl(pdf[, options])` | `POST /v1/convert/facturx/to/ubl` | UBL XML (`String`) |
+| `convertFacturXToCii(pdf[, options])` | `POST /v1/convert/facturx/to/cii` | CII XML (`String`) |
+| `convertCiiToFacturX(xml[, options])` | `POST /v1/convert/cii/to/facturx` | Factur-X PDF/A-3 (`byte[]`) |
+| `convertUblToFacturX(xml[, options])` | `POST /v1/convert/ubl/to/facturx` | Factur-X PDF/A-3 (`byte[]`) |
+| `convertXRechnungToFacturX(xml[, options])` | `POST /v1/convert/xrechnung/to/facturx` | Factur-X PDF/A-3 (`byte[]`) |
+| `transformToFacturX(pdf[, options])` | `POST /v1/transform/to/facturx` | Factur-X PDF/A-3 (`byte[]`), check before use |
 | `extractJson(file)` | `POST /v1/extract/json` | `InvoiceDocument` |
 | `extractAttachments(file)` | `POST /v1/extract/attachments` | ZIP of embedded documents (`byte[]`) |
 
@@ -111,7 +119,7 @@ System.out.println(sent.getMessageId());
 
 `emailEmbeddedFacturX(pdf, xml, email)` sends a Factur-X PDF built from your own PDF and CII XML, always with full validation. Pass `new ValidateOptions().addRule(RuleSet.BR_FR)` as a fourth argument to apply the BR-FR rules too. The subject and message are optional, and a sensible default applies when you leave them out.
 
-The result carries the message id, not the file. `accepted` means the email was handed over for delivery, not that the recipient's server has received it yet. Only HTTP 429 is retried on these calls, so a failed call never sends a second email by itself. After an `InvoiceXmlConnectionException`, or a 503 with `ErrorCodes.PROCESSING_TIMEOUT` (4023), which can happen while the send is in flight, the email may or may not have gone out, so check before you send it again.
+The result carries the message id, not the file. `accepted` means the email was handed over for delivery, not that the recipient's server has received it yet. Only HTTP 429 is retried on these calls, so a failed call never sends a second email by itself. After an `InvoiceXmlConnectionException` the email may or may not have gone out, so check before you send it again.
 
 A refused send raises `InvoiceXmlApiException`. Branch on `getErrorCode()`: `ErrorCodes.EMAIL_DOMAIN_NOT_VERIFIED`, `ErrorCodes.EMAIL_SENDING_DISABLED`, or `ErrorCodes.EMAIL_NOT_IN_PLAN` when your plan does not include this (see [pricing](https://www.invoicexml.com/pricing)). A bad address raises `InvoiceValidationException` with the field in its findings. See the [email guide](https://www.invoicexml.com/docs/api/create/facturx/email) for the details.
 
@@ -144,6 +152,59 @@ if (!result.isValid()) {
 
 The result also carries the detected profile, the schema and Schematron verdicts, and a field report with one row per invoice field.
 
+## Validation reports
+
+`validateFacturXReport` runs the same validation and returns a printable PDF report with the verdict. A failed verdict is a normal result, not an exception:
+
+```java
+ValidationReport report = client.validateFacturXReport(FileUpload.of(Path.of("facture.pdf")), new ReportOptions()
+    .addRule(RuleSet.BR_FR)
+    .setValidationLanguage(PdfLanguage.FR));
+
+Files.write(Path.of("rapport.pdf"), report.getFile());
+if (Boolean.FALSE.equals(report.getValid())) {
+    System.out.println("The invoice failed validation");
+}
+```
+
+`getValid()` is `true`, `false`, or `null` when the response carries no verdict. A missing or malformed file still raises an exception. See the [report guide](https://www.invoicexml.com/docs/api/validate/facturx/report) for the details.
+
+## Render an invoice as PDF
+
+`renderCiiToPdf` turns the CII XML of a Factur-X invoice into a readable PDF:
+
+```java
+byte[] pdf = client.renderCiiToPdf(FileUpload.of(Path.of("factur-x.xml")), new RenderOptions()
+    .setLanguage(PdfLanguage.FR)
+    .setLogoUrl("https://example.com/logo.png")
+    .setIncludeQrCode(true));
+```
+
+English is the default language, and the logo and the EPC payment QR code are optional. See the [render guide](https://www.invoicexml.com/docs/api/render/cii/to/pdf) for the details.
+
+## Convert between formats
+
+Each conversion has its own method, named after its route. Conversions to XML return a `String`, conversions to Factur-X return the PDF:
+
+```java
+String ubl = client.convertFacturXToUbl(Path.of("facture.pdf"));
+byte[] pdf = client.convertUblToFacturX(FileUpload.of(Path.of("facture.xml")),
+    new ConvertToPdfOptions().setLanguage(PdfLanguage.FR));
+```
+
+The result is validated before it is returned, and a rejected conversion throws `InvoiceValidationException`. `setValidationLanguage` on `ConvertOptions` or `ConvertToPdfOptions` words its findings. See the [convert guide](https://www.invoicexml.com/docs/api/convert/facturx/to/ubl) for the details.
+
+## Transform a PDF invoice
+
+`transformToFacturX` builds a Factur-X PDF from a PDF invoice. AI reads the PDF, so a person must check the result before it is used.
+
+```java
+byte[] facturx = client.transformToFacturX(FileUpload.of(Path.of("invoice.pdf")), new TransformOptions()
+    .setLanguage(PdfLanguage.FR));
+```
+
+Without a language, the PDF uses the language the invoice is written in. `setPreserveOriginalPdf(true)` keeps the uploaded pages and only embeds the XML. Otherwise the PDF is rendered fresh and ends with an Electronic invoice details section for checking the technical values, which `setIncludeAdvancedProperties(false)` leaves out. A 429 on this method is not retried automatically, so wait for `Retry-After` before calling again if you want to retry. See the [transform guide](https://www.invoicexml.com/docs/api/transform/to/facturx) for the details.
+
 ## Errors, rate limits and retries
 
 All exceptions are unchecked and extend `InvoiceXmlException`.
@@ -153,11 +214,11 @@ All exceptions are unchecked and extend `InvoiceXmlException`.
 | `InvoiceValidationException` | HTTP 400 with rule findings |
 | `AuthenticationException` | HTTP 401, the API key is missing or inactive |
 | `PayloadTooLargeException` | HTTP 413, a file exceeds 20 MB |
-| `RateLimitException` | HTTP 429 after the automatic retries |
+| `RateLimitException` | HTTP 429 after any automatic retries |
 | `InvoiceXmlApiException` | Any other error response, with `getErrorCode()` from `ErrorCodes` |
 | `InvoiceXmlConnectionException` | The API could not be reached |
 
-On HTTP 429 the client waits for the `Retry-After` delay and retries, three times by default. Rate-limited requests consume no credits.
+On HTTP 429 every call except transform waits for the `Retry-After` delay and retries, three times by default. A 429 is not billed.
 
 ```java
 var client = FacturXClient.builder()
