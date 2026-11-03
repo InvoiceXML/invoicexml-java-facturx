@@ -10,6 +10,7 @@ import com.invoicexml.facturx.model.InvoiceOptions;
 import com.invoicexml.facturx.model.PdfLanguage;
 import com.invoicexml.facturx.model.RuleSet;
 import com.invoicexml.facturx.model.UblProfile;
+import com.invoicexml.facturx.parse.ParsedInvoice;
 import com.invoicexml.facturx.transport.HttpTransport;
 import com.invoicexml.facturx.transport.JdkHttpTransport;
 import com.invoicexml.facturx.transport.TransportRequest;
@@ -47,7 +48,7 @@ import java.util.Properties;
  * under the French mandate, add {@link RuleSet#BR_FR} to apply the BR-FR rules too.
  *
  * <p>HTTP 429 responses are retried automatically after the {@code Retry-After}
- * delay, except on transform calls. Other errors raise an {@link InvoiceXmlApiException} subclass, and
+ * delay, except on transform and parse calls. Other errors raise an {@link InvoiceXmlApiException} subclass, and
  * network failures raise an {@link InvoiceXmlConnectionException}. All are unchecked.
  *
  * <p>Instances are immutable and thread-safe. Create one and share it.
@@ -483,43 +484,44 @@ public final class FacturXClient {
     // ---------------------------------------------------------------- render
 
     /**
-     * Renders a CII invoice XML, such as the XML of a Factur-X invoice, as a
-     * human-readable PDF.
+     * Renders an invoice XML, such as the CII XML of a Factur-X invoice, as a
+     * human-readable PDF. The format is detected from the XML: CII, UBL and
+     * XRechnung are accepted.
      *
-     * @param xml the CII XML file
+     * @param xml the invoice XML file
      * @return the PDF bytes
      */
-    public byte[] renderCiiToPdf(Path xml) {
-        return renderCiiToPdf(FileUpload.of(xml), null);
+    public byte[] renderXmlToPdf(Path xml) {
+        return renderXmlToPdf(FileUpload.of(xml), null);
     }
 
     /**
-     * Renders a CII invoice XML upload as a human-readable PDF.
+     * Renders an invoice XML upload as a human-readable PDF.
      *
-     * @param xml the CII XML upload
+     * @param xml the invoice XML upload
      * @return the PDF bytes
-     * @see #renderCiiToPdf(Path)
+     * @see #renderXmlToPdf(Path)
      */
-    public byte[] renderCiiToPdf(FileUpload xml) {
-        return renderCiiToPdf(xml, null);
+    public byte[] renderXmlToPdf(FileUpload xml) {
+        return renderXmlToPdf(xml, null);
     }
 
     /**
-     * Renders a CII invoice XML upload as a human-readable PDF with options.
+     * Renders an invoice XML upload as a human-readable PDF with options.
      *
-     * @param xml the CII XML upload
+     * @param xml the invoice XML upload
      * @param options the options, or {@code null} for the defaults
      * @return the PDF bytes
-     * @see #renderCiiToPdf(Path)
+     * @see #renderXmlToPdf(Path)
      */
-    public byte[] renderCiiToPdf(FileUpload xml, RenderOptions options) {
+    public byte[] renderXmlToPdf(FileUpload xml, RenderOptions options) {
         Multipart form = new Multipart().file("file", xml);
         if (options != null) {
             form.field("language", language(options.getLanguage()));
             form.field("logoUrl", options.getLogoUrl());
             form.field("includeQrCode", flag(options.getIncludeQrCode()));
         }
-        return postMultipart("/v1/render/cii/to/pdf", form, null).body();
+        return postMultipart("/v1/render/xml/to/pdf", form, null).body();
     }
 
     // --------------------------------------------------------------- convert
@@ -770,7 +772,43 @@ public final class FacturXClient {
             form.field("includeAdvancedProperties", flag(options.getIncludeAdvancedProperties()));
             form.field("validationLanguage", language(options.getValidationLanguage()));
         }
-        return postMultipartOnce("/v1/transform/to/facturx", form).body();
+        return postMultipartOnce("/v1/transform/to/facturx", form, null).body();
+    }
+
+    // ----------------------------------------------------------------- parse
+
+    /**
+     * Reads a PDF invoice, typed, scanned or photographed, into the structured invoice
+     * model. AI reads the PDF, so a person must check the data before it is used. XML
+     * embedded in the PDF is ignored; use {@link #extractJson(Path)} to read it.
+     *
+     * <p>The result carries a confidence score per area from 0.0 (had to guess) to 1.0
+     * (unambiguous), and the language the invoice is written in as an ISO 639-1 code.
+     * Both can be missing.
+     *
+     * <p>A 429 on this method is not retried automatically, so wait for
+     * {@code Retry-After} before calling again if you want to retry.
+     *
+     * @param pdf the PDF invoice
+     * @return the invoice with its confidence and language
+     */
+    public ParsedInvoice parseJson(Path pdf) {
+        return parseJson(FileUpload.of(pdf));
+    }
+
+    /**
+     * Reads a PDF invoice upload into the structured invoice model. AI reads the PDF,
+     * so a person must check the data before it is used.
+     *
+     * <p>A 429 on this method is not retried automatically, so wait for
+     * {@code Retry-After} before calling again if you want to retry.
+     *
+     * @param pdf the PDF upload
+     * @return the invoice with its confidence and language
+     * @see #parseJson(Path)
+     */
+    public ParsedInvoice parseJson(FileUpload pdf) {
+        return postMultipartOnceForJson("/v1/parse/json", new Multipart().file("file", pdf), ParsedInvoice.class);
     }
 
     // --------------------------------------------------------------- extract
@@ -932,12 +970,16 @@ public final class FacturXClient {
         return execute(path, form.contentType(), form.build(), accept);
     }
 
-    private TransportResponse postMultipartOnce(String path, Multipart form) {
-        return execute(path, form.contentType(), form.build(), null, 0);
+    private TransportResponse postMultipartOnce(String path, Multipart form, String accept) {
+        return execute(path, form.contentType(), form.build(), accept, 0);
     }
 
     private <T> T postMultipartForJson(String path, Multipart form, Class<T> type) {
         return readJson(path, postMultipart(path, form, "application/json"), type);
+    }
+
+    private <T> T postMultipartOnceForJson(String path, Multipart form, Class<T> type) {
+        return readJson(path, postMultipartOnce(path, form, "application/json"), type);
     }
 
     private <T> T readJson(String path, TransportResponse response, Class<T> type) {
@@ -1097,7 +1139,7 @@ public final class FacturXClient {
 
         /**
          * Sets how many times a request answered with HTTP 429 is retried after the
-         * {@code Retry-After} delay, on every call except transform. Defaults to 3.
+         * {@code Retry-After} delay, on every call except transform and parse. Defaults to 3.
          * Use 0 to disable retries.
          *
          * @param maxRetries the number of retries

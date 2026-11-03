@@ -3,7 +3,7 @@ package com.invoicexml.facturx;
 import com.invoicexml.facturx.model.PdfLanguage;
 
 /**
- * Options for {@link FacturXClient#renderCiiToPdf(FileUpload, RenderOptions)}.
+ * Options for {@link FacturXClient#renderXmlToPdf(FileUpload, RenderOptions)}.
  */
 public final class RenderOptions {
 
