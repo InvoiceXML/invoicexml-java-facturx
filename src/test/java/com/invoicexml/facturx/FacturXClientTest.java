@@ -17,6 +17,7 @@ import com.invoicexml.facturx.model.InvoiceDocument;
 import com.invoicexml.facturx.model.InvoiceOptions;
 import com.invoicexml.facturx.model.PdfLanguage;
 import com.invoicexml.facturx.model.RuleSet;
+import com.invoicexml.facturx.model.UblProfile;
 import com.invoicexml.facturx.transport.TransportRequest;
 import com.invoicexml.facturx.validation.ValidationFinding;
 import com.invoicexml.facturx.validation.ValidationReport;
@@ -152,6 +153,121 @@ class FacturXClientTest {
     @Test
     void createRequiresARequest() {
         assertThrows(NullPointerException.class, () -> client().createFacturX((CreateInvoiceRequest) null));
+    }
+
+    @Test
+    void createCiiPostsJsonAndReturnsXml() throws Exception {
+        stub.respond(200, "application/xml", XML.getBytes(StandardCharsets.UTF_8),
+                "Content-Disposition", "attachment; filename=invoice-cii-FA-2026-0042.xml");
+
+        String xml = client().createCii(Fixtures.invoice());
+
+        assertEquals(XML, xml);
+        TransportRequest r = stub.last();
+        assertEquals("POST", r.method());
+        assertEquals("https://api.invoicexml.com/v1/create/cii", r.uri().toString());
+        assertEquals("application/json", r.header("Content-Type"));
+        JsonNode sent = json.readTree(r.body());
+        assertEquals("FA-2026-0042", sent.at("/invoice/invoiceNumber").asText());
+        assertFalse(sent.has("options"), "null options must be omitted");
+    }
+
+    @Test
+    void createCiiSendsLanguageAndRules() throws Exception {
+        stub.respond(200, "application/xml", XML.getBytes(StandardCharsets.UTF_8));
+
+        client().createCii(Fixtures.invoice(), new InvoiceOptions()
+                .setLanguage(PdfLanguage.FR)
+                .addRule(RuleSet.BR_FR));
+
+        JsonNode options = json.readTree(stub.last().body()).get("options");
+        assertEquals("FR", options.get("language").asText());
+        assertEquals(1, options.get("rules").size());
+        assertEquals("br-fr", options.get("rules").get(0).asText());
+        assertEquals(2, options.size(), "unset options must be omitted");
+    }
+
+    @Test
+    void createCiiTakesAFullRequestEnvelope() throws Exception {
+        stub.respond(200, "application/xml", XML.getBytes(StandardCharsets.UTF_8));
+
+        String xml = client().createCii(new CreateInvoiceRequest().setInvoice(Fixtures.invoice())
+                .setOptions(new InvoiceOptions().setLanguage(PdfLanguage.DE)));
+
+        assertEquals(XML, xml);
+        assertEquals("/v1/create/cii", stub.last().uri().getPath());
+        JsonNode sent = json.readTree(stub.last().body());
+        assertEquals("FA-2026-0042", sent.at("/invoice/invoiceNumber").asText());
+        assertEquals("DE", sent.at("/options/language").asText());
+    }
+
+    @Test
+    void createUblPostsJsonAndReturnsXml() throws Exception {
+        stub.respond(200, "application/xml", XML.getBytes(StandardCharsets.UTF_8),
+                "Content-Disposition", "attachment; filename=invoice-ubl-FA-2026-0042.xml");
+
+        String xml = client().createUbl(Fixtures.invoice());
+
+        assertEquals(XML, xml);
+        TransportRequest r = stub.last();
+        assertEquals("POST", r.method());
+        assertEquals("https://api.invoicexml.com/v1/create/ubl", r.uri().toString());
+        assertEquals("application/json", r.header("Content-Type"));
+        JsonNode sent = json.readTree(r.body());
+        assertEquals("FA-2026-0042", sent.at("/invoice/invoiceNumber").asText());
+        assertFalse(sent.has("options"), "null options must be omitted");
+    }
+
+    @Test
+    void createUblSendsProfileLanguageAndRules() throws Exception {
+        stub.respond(200, "application/xml", XML.getBytes(StandardCharsets.UTF_8));
+
+        client().createUbl(Fixtures.invoice(), new InvoiceOptions()
+                .setProfile(UblProfile.PEPPOL_BIS_3)
+                .setLanguage(PdfLanguage.FR)
+                .addRule(RuleSet.BR_FR));
+
+        JsonNode options = json.readTree(stub.last().body()).get("options");
+        assertEquals("peppol-bis-3", options.get("profile").asText());
+        assertEquals("FR", options.get("language").asText());
+        assertEquals("br-fr", options.get("rules").get(0).asText());
+        assertEquals(3, options.size(), "unset options must be omitted");
+    }
+
+    @Test
+    void createUblTakesAFullRequestEnvelope() throws Exception {
+        stub.respond(200, "application/xml", XML.getBytes(StandardCharsets.UTF_8));
+
+        client().createUbl(new CreateInvoiceRequest().setInvoice(Fixtures.invoice())
+                .setOptions(new InvoiceOptions().setProfile(UblProfile.NLCIUS)));
+
+        assertEquals("/v1/create/ubl", stub.last().uri().getPath());
+        assertEquals("nlcius", json.readTree(stub.last().body()).at("/options/profile").asText());
+    }
+
+    @Test
+    void createCiiAndUblRejectionCarriesFindings() {
+        stub.respondJson(400, Fixtures.resource("create-400.json"));
+        stub.respondJson(400, Fixtures.resource("create-400.json"));
+
+        InvoiceValidationException cii = assertThrows(InvoiceValidationException.class,
+                () -> client().createCii(Fixtures.invoice()));
+        assertEquals("/v1/create/cii", stub.last().uri().getPath());
+        InvoiceValidationException ubl = assertThrows(InvoiceValidationException.class,
+                () -> client().createUbl(Fixtures.invoice()));
+        assertEquals("/v1/create/ubl", stub.last().uri().getPath());
+
+        for (InvoiceValidationException e : List.of(cii, ubl)) {
+            assertEquals(ErrorCodes.MODEL_VALIDATION, e.getErrorCode());
+            assertEquals("BR-CO-26", e.getErrors().get(0).getRule());
+        }
+    }
+
+    @Test
+    void createCiiAndUblRequireARequest() {
+        assertThrows(NullPointerException.class, () -> client().createCii((CreateInvoiceRequest) null));
+        assertThrows(NullPointerException.class, () -> client().createUbl((CreateInvoiceRequest) null));
+        assertTrue(stub.requests.isEmpty());
     }
 
     // ----------------------------------------------------------- validate

@@ -9,6 +9,7 @@ import com.invoicexml.facturx.model.InvoiceDocument;
 import com.invoicexml.facturx.model.InvoiceOptions;
 import com.invoicexml.facturx.model.PdfLanguage;
 import com.invoicexml.facturx.model.RuleSet;
+import com.invoicexml.facturx.model.UblProfile;
 import com.invoicexml.facturx.transport.HttpTransport;
 import com.invoicexml.facturx.transport.JdkHttpTransport;
 import com.invoicexml.facturx.transport.TransportRequest;
@@ -147,6 +148,90 @@ public final class FacturXClient {
      */
     public byte[] createFacturX(CreateInvoiceRequest request) {
         return postJson("/v1/create/facturx", request, null).body();
+    }
+
+    /**
+     * Creates a plain UN/CEFACT CII invoice XML, validated with the full rule set.
+     *
+     * <p>The XML carries the EN 16931 guideline identifier, so it embeds straight
+     * into your own PDF with {@link #embedFacturX(FileUpload, FileUpload)}. Totals
+     * and the VAT breakdown are calculated from the lines when omitted.
+     *
+     * @param invoice the invoice
+     * @return the XML document
+     * @throws InvoiceValidationException when the invoice violates the rule set
+     */
+    public String createCii(InvoiceDocument invoice) {
+        return createCii(new CreateInvoiceRequest().setInvoice(invoice));
+    }
+
+    /**
+     * Creates a plain CII invoice XML with options: extra rule sets such as
+     * {@link RuleSet#BR_FR}, or the language of the default texts. The PDF
+     * rendering options do not apply.
+     *
+     * @param invoice the invoice
+     * @param options the options, or {@code null} for the defaults
+     * @return the XML document
+     * @throws InvoiceValidationException when the invoice violates the rule set
+     * @see #createCii(InvoiceDocument)
+     */
+    public String createCii(InvoiceDocument invoice, InvoiceOptions options) {
+        return createCii(new CreateInvoiceRequest().setInvoice(invoice).setOptions(options));
+    }
+
+    /**
+     * Creates a plain CII invoice XML from a full request envelope.
+     *
+     * @param request the request
+     * @return the XML document
+     * @throws InvoiceValidationException when the invoice violates the rule set
+     * @see #createCii(InvoiceDocument)
+     */
+    public String createCii(CreateInvoiceRequest request) {
+        return new String(postJson("/v1/create/cii", request, null).body(), StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Creates a UBL 2.1 invoice XML, validated with the rule set of its profile.
+     *
+     * <p>The profile is Peppol BIS Billing 3.0 unless the options set another
+     * {@link UblProfile}. Totals and the VAT breakdown are calculated from the
+     * lines when omitted.
+     *
+     * @param invoice the invoice
+     * @return the XML document
+     * @throws InvoiceValidationException when the invoice violates the rule set
+     */
+    public String createUbl(InvoiceDocument invoice) {
+        return createUbl(new CreateInvoiceRequest().setInvoice(invoice));
+    }
+
+    /**
+     * Creates a UBL 2.1 invoice XML with options: the {@link UblProfile}, extra
+     * rule sets such as {@link RuleSet#BR_FR}, or the language of the default
+     * texts. The PDF rendering options do not apply.
+     *
+     * @param invoice the invoice
+     * @param options the options, or {@code null} for the defaults
+     * @return the XML document
+     * @throws InvoiceValidationException when the invoice violates the rule set
+     * @see #createUbl(InvoiceDocument)
+     */
+    public String createUbl(InvoiceDocument invoice, InvoiceOptions options) {
+        return createUbl(new CreateInvoiceRequest().setInvoice(invoice).setOptions(options));
+    }
+
+    /**
+     * Creates a UBL 2.1 invoice XML from a full request envelope.
+     *
+     * @param request the request
+     * @return the XML document
+     * @throws InvoiceValidationException when the invoice violates the rule set
+     * @see #createUbl(InvoiceDocument)
+     */
+    public String createUbl(CreateInvoiceRequest request) {
+        return new String(postJson("/v1/create/ubl", request, null).body(), StandardCharsets.UTF_8);
     }
 
     // -------------------------------------------------------------- validate

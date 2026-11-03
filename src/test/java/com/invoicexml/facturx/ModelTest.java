@@ -12,11 +12,14 @@ import com.invoicexml.facturx.model.InvoiceNote;
 import com.invoicexml.facturx.model.InvoiceOptions;
 import com.invoicexml.facturx.model.RuleSet;
 import com.invoicexml.facturx.model.SellerIdentifier;
+import com.invoicexml.facturx.model.UblProfile;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.Arrays;
 import java.util.List;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 
 class ModelTest {
@@ -48,6 +51,17 @@ class ModelTest {
         assertEquals(RuleSet.BR_FR, mapper.readValue(json, InvoiceOptions.class).getRules().get(0));
         assertEquals(RuleSet.BR_FR, RuleSet.fromValue("BR-FR"));
         assertThrows(IllegalArgumentException.class, () -> RuleSet.fromValue("br-de"));
+    }
+
+    @Test
+    void ublProfileRoundTrips() throws Exception {
+        String json = mapper.writeValueAsString(new InvoiceOptions().setProfile(UblProfile.PEPPOL_BIS_3));
+        assertEquals("{\"profile\":\"peppol-bis-3\"}", json);
+        assertEquals(UblProfile.PEPPOL_BIS_3, mapper.readValue(json, InvoiceOptions.class).getProfile());
+        assertEquals(List.of("en16931", "peppol-bis-3", "nlcius", "ehf", "xrechnung", "pint"),
+                Arrays.stream(UblProfile.values()).map(UblProfile::getValue).collect(Collectors.toList()));
+        assertEquals(UblProfile.XRECHNUNG, UblProfile.fromValue("XRechnung"));
+        assertThrows(IllegalArgumentException.class, () -> UblProfile.fromValue("pint-sg"));
     }
 
     @Test

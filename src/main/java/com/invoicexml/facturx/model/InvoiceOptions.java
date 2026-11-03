@@ -18,6 +18,9 @@ import java.util.Objects;
         isGetterVisibility = JsonAutoDetect.Visibility.NONE, setterVisibility = JsonAutoDetect.Visibility.NONE)
 public final class InvoiceOptions {
 
+    @JsonProperty("profile")
+    private UblProfile profile;
+
     @JsonProperty("rules")
     private List<RuleSet> rules;
 
@@ -41,7 +44,27 @@ public final class InvoiceOptions {
     }
 
     /**
-     * Returns the value of {@code rules}. Extra rule sets to validate the invoice against, on top of the rules of its declared profile and without changing that profile. {@link RuleSet#BR_FR} applies the French mandate's BR-FR rules and needs at least the BASIC profile. Violations reject the request with the official rule identifiers.
+     * Returns the value of {@code profile}. UBL profile of {@code /v1/create/ubl}. It picks the UBL CustomizationID and the rule set the invoice is validated against. {@link UblProfile#PEPPOL_BIS_3} when omitted. The other create routes ignore it.
+     *
+     * @return the value, or {@code null} when not set
+     */
+    public UblProfile getProfile() {
+        return profile;
+    }
+
+    /**
+     * Sets {@code profile}. UBL profile of {@code /v1/create/ubl}. It picks the UBL CustomizationID and the rule set the invoice is validated against. {@link UblProfile#PEPPOL_BIS_3} when omitted. The other create routes ignore it.
+     *
+     * @param profile the new value, or {@code null} to omit it
+     * @return this instance
+     */
+    public InvoiceOptions setProfile(UblProfile profile) {
+        this.profile = profile;
+        return this;
+    }
+
+    /**
+     * Returns the value of {@code rules}. Extra rule sets to validate the invoice against, on top of the rules of its declared profile and without changing that profile. {@link RuleSet#BR_FR} applies the French mandate's BR-FR rules and, on Factur-X and CII, needs at least the BASIC profile. Violations reject the request with the official rule identifiers.
      *
      * @return the value, or {@code null} when not set
      */
@@ -50,7 +73,7 @@ public final class InvoiceOptions {
     }
 
     /**
-     * Sets {@code rules}. Extra rule sets to validate the invoice against, on top of the rules of its declared profile and without changing that profile. {@link RuleSet#BR_FR} applies the French mandate's BR-FR rules and needs at least the BASIC profile. Violations reject the request with the official rule identifiers.
+     * Sets {@code rules}. Extra rule sets to validate the invoice against, on top of the rules of its declared profile and without changing that profile. {@link RuleSet#BR_FR} applies the French mandate's BR-FR rules and, on Factur-X and CII, needs at least the BASIC profile. Violations reject the request with the official rule identifiers.
      *
      * @param rules the new value, or {@code null} to omit it
      * @return this instance
@@ -75,7 +98,7 @@ public final class InvoiceOptions {
     }
 
     /**
-     * Returns the value of {@code language}. Language of the rendered PDF template. English when omitted.
+     * Returns the value of {@code language}. Language of the rendered PDF template and of the default texts the XML gains when the invoice has none, such as the payment terms. English when omitted.
      *
      * @return the value, or {@code null} when not set
      */
@@ -84,7 +107,7 @@ public final class InvoiceOptions {
     }
 
     /**
-     * Sets {@code language}. Language of the rendered PDF template. English when omitted.
+     * Sets {@code language}. Language of the rendered PDF template and of the default texts the XML gains when the invoice has none, such as the payment terms. English when omitted.
      *
      * @param language the new value, or {@code null} to omit it
      * @return this instance
@@ -115,7 +138,7 @@ public final class InvoiceOptions {
     }
 
     /**
-     * Returns the value of {@code pdfUrl}. Public http(s) URL of your own PDF to use as the visual layer. The generated XML is embedded into that PDF instead of the rendered template, so {@code language}, {@code brandColor}, {@code logoUrl} and {@code includeAdvancedProperties} are ignored.
+     * Returns the value of {@code pdfUrl}. Public http(s) URL of your own PDF to use as the visual layer. The generated XML is embedded into that PDF instead of the rendered template, so {@code language}, {@code brandColor}, {@code logoUrl} and {@code includeAdvancedProperties} are ignored. The XML create routes ignore it.
      *
      * @return the value, or {@code null} when not set
      */
@@ -124,7 +147,7 @@ public final class InvoiceOptions {
     }
 
     /**
-     * Sets {@code pdfUrl}. Public http(s) URL of your own PDF to use as the visual layer. The generated XML is embedded into that PDF instead of the rendered template, so {@code language}, {@code brandColor}, {@code logoUrl} and {@code includeAdvancedProperties} are ignored.
+     * Sets {@code pdfUrl}. Public http(s) URL of your own PDF to use as the visual layer. The generated XML is embedded into that PDF instead of the rendered template, so {@code language}, {@code brandColor}, {@code logoUrl} and {@code includeAdvancedProperties} are ignored. The XML create routes ignore it.
      *
      * @param pdfUrl the new value, or {@code null} to omit it
      * @return this instance
@@ -183,7 +206,8 @@ public final class InvoiceOptions {
             return false;
         }
         InvoiceOptions that = (InvoiceOptions) o;
-        return Objects.equals(rules, that.rules)
+        return Objects.equals(profile, that.profile)
+                && Objects.equals(rules, that.rules)
                 && Objects.equals(language, that.language)
                 && Objects.equals(brandColor, that.brandColor)
                 && Objects.equals(pdfUrl, that.pdfUrl)
@@ -193,13 +217,14 @@ public final class InvoiceOptions {
 
     @Override
     public int hashCode() {
-        return Objects.hash(rules, language, brandColor, pdfUrl, logoUrl, includeAdvancedProperties);
+        return Objects.hash(profile, rules, language, brandColor, pdfUrl, logoUrl, includeAdvancedProperties);
     }
 
     @Override
     public String toString() {
         return "InvoiceOptions{"
-                + "rules=" + rules
+                + "profile=" + profile
+                + ", rules=" + rules
                 + ", language=" + language
                 + ", brandColor=" + brandColor
                 + ", pdfUrl=" + pdfUrl

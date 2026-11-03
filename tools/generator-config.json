@@ -3,9 +3,22 @@
   "outDir": "src/main/java/com/invoicexml/facturx/model",
   "roots": ["CreateInvoiceRequest"],
   "excludeProperties": {
-    "InvoiceOptions": ["profile", "syntax"]
+    "InvoiceOptions": ["syntax"]
   },
   "stringEnums": {
+    "InvoiceOptions.profile": {
+      "type": "UblProfile",
+      "doc": "UBL invoice profiles of {@code /v1/create/ubl}. The profile picks the UBL CustomizationID and the rule set the invoice is validated against.",
+      "values": { "EN16931": "en16931", "PEPPOL_BIS_3": "peppol-bis-3", "NLCIUS": "nlcius", "EHF": "ehf", "XRECHNUNG": "xrechnung", "PINT": "pint" },
+      "valueDocs": {
+        "EN16931": "Generic EN 16931, without a CIUS.",
+        "PEPPOL_BIS_3": "Peppol BIS Billing 3.0, the default.",
+        "NLCIUS": "The Dutch public sector CIUS (NLCIUS).",
+        "EHF": "The Norwegian EHF Billing 3.0.",
+        "XRECHNUNG": "XRechnung 3.0 for the German public sector.",
+        "PINT": "The Peppol International (PINT) base profile."
+      }
+    },
     "InvoiceOptions.rules": {
       "type": "RuleSet",
       "doc": "Extra national rule sets, validated on top of the rules of the profile an invoice declares.",
@@ -16,10 +29,11 @@
   "propertyDocs": {
     "CreateInvoiceRequest.invoice": "The invoice to create.",
     "CreateInvoiceRequest.options": "Optional rendering and processing settings. Defaults apply when omitted.",
-    "InvoiceOptions.rules": "Extra rule sets to validate the invoice against, on top of the rules of its declared profile and without changing that profile. {@link RuleSet#BR_FR} applies the French mandate's BR-FR rules and needs at least the BASIC profile. Violations reject the request with the official rule identifiers.",
-    "InvoiceOptions.language": "Language of the rendered PDF template. English when omitted.",
+    "InvoiceOptions.profile": "UBL profile of {@code /v1/create/ubl}. It picks the UBL CustomizationID and the rule set the invoice is validated against. {@link UblProfile#PEPPOL_BIS_3} when omitted. The other create routes ignore it.",
+    "InvoiceOptions.rules": "Extra rule sets to validate the invoice against, on top of the rules of its declared profile and without changing that profile. {@link RuleSet#BR_FR} applies the French mandate's BR-FR rules and, on Factur-X and CII, needs at least the BASIC profile. Violations reject the request with the official rule identifiers.",
+    "InvoiceOptions.language": "Language of the rendered PDF template and of the default texts the XML gains when the invoice has none, such as the payment terms. English when omitted.",
     "InvoiceOptions.brandColor": "Primary brand colour in {@code #RRGGBB} form, applied to headings and accent backgrounds of the rendered PDF template. Body text is never recoloured.",
-    "InvoiceOptions.pdfUrl": "Public http(s) URL of your own PDF to use as the visual layer. The generated XML is embedded into that PDF instead of the rendered template, so {@code language}, {@code brandColor}, {@code logoUrl} and {@code includeAdvancedProperties} are ignored.",
+    "InvoiceOptions.pdfUrl": "Public http(s) URL of your own PDF to use as the visual layer. The generated XML is embedded into that PDF instead of the rendered template, so {@code language}, {@code brandColor}, {@code logoUrl} and {@code includeAdvancedProperties} are ignored. The XML create routes ignore it.",
     "InvoiceOptions.logoUrl": "Public URL of the seller's logo (PNG or JPEG, at most 2 MB and 4 megapixels), printed top left on the rendered PDF template and scaled to fit a 170 x 48 pt box.",
     "InvoiceOptions.includeAdvancedProperties": "When {@code true}, the rendered PDF gains an \"Electronic invoice details\" section listing technical properties that a classic layout does not show, such as the specification identifier, the business process, party identifiers and electronic addresses. Defaults to {@code false}."
   }
